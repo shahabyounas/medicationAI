@@ -18,6 +18,7 @@ import {
   type FamilyResponse,
   type MedicinesResponse,
   type MedicationForm,
+  type TodayCourseGroup,
   type MessageContext,
   type Patient,
   type TodayResponse,
@@ -124,9 +125,9 @@ export async function buildToday(patientId: string, now = new Date()): Promise<T
   );
 
   const doseForms = await medicationFormsByCourse(activeCourses);
-  const primary = await buildPrimaryCondition(patient, activeCourses, now);
-  const agentLine = await buildAgentLine(patient, nextDose, now);
-  const nudge = await buildFeelBetterNudge(patient, activeCourses, primary, now);
+  const courseGroups = await buildCourseGroups(patient, activeCourses, now);
+  const agentLine = buildAgentLine(patient, nextDose, todaysDoses);
+  const nudge = await buildFeelBetterNudge(patient, activeCourses, courseGroups, now);
 
   return {
     patientName: patient.name.split(' ')[0] ?? patient.name,
@@ -138,59 +139,53 @@ export async function buildToday(patientId: string, now = new Date()): Promise<T
     activeCourses: progresses,
     feelBetterNudge: nudge,
     activity: await eventsSince(patientId, dayStart),
-    primaryCondition: primary,
+    courseGroups,
   };
 }
 
-/** The sentence in the dark card at the top of the Today screen. */
-async function buildAgentLine(patient: Patient, dose: Dose | null, now: Date): Promise<string> {
-  if (!dose) {
-    return 'All doses done for today. Nothing else to take — I\'ll remind you tomorrow.';
+/**
+ * One short sentence under the greeting.
+ *
+ * Deliberately tiny. It used to be a paragraph in a dark card that restated the
+ * dose card directly beneath it — two things saying the same thing is how a
+ * screen starts feeling complicated.
+ */
+function buildAgentLine(patient: Patient, next: Dose | null, todaysDoses: readonly Dose[]): string {
+  const missed = todaysDoses.filter((d) => d.status === 'missed').length;
+
+  if (!next) {
+    if (todaysDoses.length === 0) return 'Nothing scheduled today.';
+    return missed > 0
+      ? `That's everything for today. ${missed} ${missed === 1 ? 'dose was' : 'doses were'} missed.`
+      : "That's everything for today. Well done.";
   }
 
-  const course = await collections.courses.findById(dose.courseId);
-  const medication = course ? await collections.medications.findById(course.medicationId) : null;
-  const condition = dose.conditionId
-    ? await collections.conditions.findById(dose.conditionId)
-    : null;
-
-  const context: MessageContext = {
-    patientName: patient.name.split(' ')[0] ?? patient.name,
-    medicationName: dose.medicationName,
-    amount: dose.amount,
-    unitLabel: MEDICATION_FORM_LABELS[medication?.form ?? 'tablet'],
-    scheduledAt: dose.scheduledAt,
-    timeZone: patient.timezone,
-    doseNumber: dose.doseNumber,
-    totalDoses: course?.totalDoses ?? null,
-    dosesRemaining: null,
-    dayNumber: dose.dayNumber,
-    durationDays: course?.durationDays ?? null,
-    doctorName: null,
-    conditionName: condition?.name ?? null,
-    familyContactName: patient.familyContacts[0]?.name ?? null,
-  };
-
-  if (dose.status === 'due') return escalationMessage('reminder_1', context);
-
-  const when = formatClockTime(dose.scheduledAt, patient.timezone);
-  const rescheduled = dose.rescheduledReason ? ` I moved it — ${dose.rescheduledReason}.` : '';
-  return `Next up at ${when}: ${dose.amount} ${context.unitLabel} of ${dose.medicationName}.${rescheduled}`;
+  if (next.status === 'due') return `Time to take your ${next.medicationName}.`;
+  return `Nothing to take until ${formatClockTime(next.scheduledAt, patient.timezone)}.`;
 }
 
 async function buildFeelBetterNudge(
   patient: Patient,
   courses: readonly Course[],
-  primary: TodayResponse['primaryCondition'],
+  groups: readonly TodayCourseGroup[],
   now: Date,
 ): Promise<TodayResponse['feelBetterNudge']> {
-  if (!primary) return null;
+  // The first finite course that has reached the day people give up on.
+  const group = groups.find(
+    (candidate) =>
+      !candidate.isOngoing &&
+      shouldShowFeelBetterNudge(
+        candidate.dayNumber,
+        candidate.remainingCount ?? 0,
+        candidate.durationDays,
+      ),
+  );
+  if (!group) return null;
 
-  const course = courses.find((c) => c.conditionId === primary.conditionId && c.durationDays);
+  const course = courses.find((c) => c.conditionId === group.conditionId && c.durationDays);
   if (!course) return null;
 
-  const remaining = Math.max(0, primary.totalDoses - primary.takenCount);
-  if (!shouldShowFeelBetterNudge(primary.dayNumber, remaining, course.durationDays)) return null;
+  const remaining = group.remainingCount ?? 0;
 
   const prescription = await collections.prescriptions.findById(course.prescriptionId);
   const doctor = prescription ? await collections.doctors.findById(prescription.doctorId) : null;
@@ -204,60 +199,99 @@ async function buildFeelBetterNudge(
       unitLabel: 'tablet',
       scheduledAt: now,
       timeZone: patient.timezone,
-      doseNumber: primary.takenCount + 1,
-      totalDoses: primary.totalDoses,
+      doseNumber: group.takenCount + 1,
+      totalDoses: group.totalDoses,
       dosesRemaining: remaining,
-      dayNumber: primary.dayNumber,
+      dayNumber: group.dayNumber,
       durationDays: course.durationDays,
       doctorName: doctor?.name ?? null,
-      conditionName: primary.name,
+      conditionName: group.name,
       familyContactName: null,
     }),
-    daysLeft: Math.max(0, (course.durationDays ?? 0) - primary.dayNumber),
+    daysLeft: Math.max(0, (course.durationDays ?? 0) - (group.dayNumber ?? 0)),
   };
 }
 
-/** The condition card with the ring and the row of day cells. */
-async function buildPrimaryCondition(
+/**
+ * Every active course, grouped by what it treats.
+ *
+ * Courses that share a condition are shown as one thing, because that is how
+ * the patient thinks of them — "my chest infection", not "my Amoxicillin and my
+ * Pantoprazole". A course with no condition stands on its own under the
+ * medicine's name rather than being dropped.
+ */
+async function buildCourseGroups(
   patient: Patient,
   courses: readonly Course[],
   now: Date,
-): Promise<TodayResponse['primaryCondition']> {
-  const withCondition = courses.filter((c) => c.conditionId !== null && c.durationDays !== null);
-  if (withCondition.length === 0) return null;
+): Promise<TodayCourseGroup[]> {
+  const byKey = new Map<string, Course[]>();
+  for (const course of courses) {
+    const key = course.conditionId ?? `course:${course._id}`;
+    byKey.set(key, [...(byKey.get(key) ?? []), course]);
+  }
 
-  // The condition with the nearest end date is the one the patient is actively
-  // working through; a chronic medicine should not displace it.
-  const focus = [...withCondition].sort(
-    (a, b) => (a.expectedEndAt?.getTime() ?? 0) - (b.expectedEndAt?.getTime() ?? 0),
-  )[0];
-  if (!focus?.conditionId) return null;
+  const groups: TodayCourseGroup[] = [];
 
-  const condition = await collections.conditions.findById(focus.conditionId);
-  if (!condition) return null;
+  for (const [key, siblings] of byKey) {
+    const first = siblings[0];
+    if (!first) continue;
 
-  const siblings = courses.filter((c) => c.conditionId === condition._id);
-  const doses = await collections.doses.find({ courseId: { $in: siblings.map((c) => c._id) } });
+    const condition = first.conditionId
+      ? await collections.conditions.findById(first.conditionId)
+      : null;
 
-  const summary = summariseAdherence(doses, now);
-  const totalDoses = siblings.reduce((sum, c) => sum + (c.totalDoses ?? 0), 0);
-  const durationDays = focus.durationDays;
-  const dayNumber = focus.startedAt
-    ? Math.max(1, calendarDaysBetween(focus.startedAt, now, patient.timezone) + 1)
-    : 1;
+    const doses = await collections.doses.find({
+      courseId: { $in: siblings.map((c) => c._id) },
+    });
+    const summary = summariseAdherence(doses, now);
 
-  const dayCells = buildDayCells(doses, focus.startedAt, dayNumber, durationDays, patient.timezone);
+    // A group is only "ongoing" when nothing in it has an end date.
+    const isOngoing = siblings.every((c) => c.totalDoses === null);
+    const totalDoses = isOngoing
+      ? null
+      : siblings.reduce((sum, c) => sum + (c.totalDoses ?? 0), 0);
 
-  return {
-    conditionId: condition._id,
-    name: condition.name,
-    dayNumber,
-    durationDays,
-    takenCount: summary.taken,
-    totalDoses,
-    percentComplete: totalDoses === 0 ? 0 : Math.round((summary.taken / totalDoses) * 100),
-    dayCells,
-  };
+    const startedAt = siblings.reduce<Date | null>(
+      (earliest, c) =>
+        c.startedAt && (earliest === null || c.startedAt < earliest) ? c.startedAt : earliest,
+      null,
+    );
+    const durationDays = siblings.reduce<number | null>(
+      (longest, c) =>
+        c.durationDays !== null && (longest === null || c.durationDays > longest)
+          ? c.durationDays
+          : longest,
+      null,
+    );
+    const dayNumber = startedAt
+      ? Math.max(1, calendarDaysBetween(startedAt, now, patient.timezone) + 1)
+      : null;
+
+    groups.push({
+      conditionId: condition?._id ?? null,
+      name: condition?.name ?? first.medicationName,
+      isOngoing,
+      dayNumber,
+      durationDays,
+      takenCount: summary.taken,
+      totalDoses,
+      remainingCount: totalDoses === null ? null : Math.max(0, totalDoses - summary.taken),
+      medicationNames: siblings.map((c) => c.medicationName),
+      dayCells:
+        isOngoing || dayNumber === null
+          ? []
+          : buildDayCells(doses, startedAt, dayNumber, durationDays, patient.timezone),
+    });
+    void key;
+  }
+
+  // The course closest to finishing goes first; open-ended ones sink to the
+  // bottom, since there is never anything urgent about them.
+  return groups.sort((a, b) => {
+    if (a.isOngoing !== b.isOngoing) return a.isOngoing ? 1 : -1;
+    return (a.remainingCount ?? Infinity) - (b.remainingCount ?? Infinity);
+  });
 }
 
 function buildDayCells(

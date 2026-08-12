@@ -152,7 +152,7 @@ export function App(): ReactNode {
 
   const openReport = useCallback(
     async (conditionId?: string) => {
-      const id = conditionId ?? data?.today.primaryCondition?.conditionId;
+      const id = conditionId ?? data?.today.courseGroups.find((g) => g.conditionId)?.conditionId;
       if (!id) return;
       try {
         setOverlay({ kind: 'report', report: await api.report(id) });
@@ -329,7 +329,7 @@ export function App(): ReactNode {
                   family={data.family}
                   patientId={patientId}
                   onOpenReport={() => void openReport()}
-                  reportAvailable={data.today.primaryCondition !== null}
+                  reportAvailable={data.today.courseGroups.some((g) => g.conditionId !== null)}
                 />
               )}
             </div>

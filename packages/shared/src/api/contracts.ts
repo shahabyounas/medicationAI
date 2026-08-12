@@ -47,6 +47,29 @@ export const DoseViewSchema = DoseSchema.extend({
 });
 export type DoseView = z.infer<typeof DoseViewSchema>;
 
+/** One thing being treated, with everything the patient takes for it. */
+export const TodayCourseGroupSchema = z.object({
+  conditionId: IdSchema.nullable(),
+  /** The condition, or the medicine's own name when it treats nothing named. */
+  name: NonEmptyString,
+  /** True for a long-term medicine — there is no finish line to count towards. */
+  isOngoing: z.boolean(),
+  dayNumber: z.number().int().min(1).nullable(),
+  durationDays: z.number().int().min(1).nullable(),
+  takenCount: z.number().int().min(0),
+  totalDoses: z.number().int().min(0).nullable(),
+  remainingCount: z.number().int().min(0).nullable(),
+  medicationNames: z.array(NonEmptyString),
+  /** Empty for an ongoing course, which has no run of days to show. */
+  dayCells: z.array(
+    z.object({
+      day: z.number().int().min(1),
+      state: z.enum(['done', 'today', 'upcoming', 'missed']),
+    }),
+  ),
+});
+export type TodayCourseGroup = z.infer<typeof TodayCourseGroupSchema>;
+
 export const TodayResponseSchema = z.object({
   patientName: NonEmptyString,
   timeZone: NonEmptyString,
@@ -65,23 +88,15 @@ export const TodayResponseSchema = z.object({
     })
     .nullable(),
   activity: z.array(AgentEventSchema),
-  primaryCondition: z
-    .object({
-      conditionId: IdSchema,
-      name: NonEmptyString,
-      dayNumber: z.number().int().min(1),
-      durationDays: z.number().int().min(1).nullable(),
-      takenCount: z.number().int().min(0),
-      totalDoses: z.number().int().min(0),
-      percentComplete: z.number().min(0).max(100),
-      dayCells: z.array(
-        z.object({
-          day: z.number().int().min(1),
-          state: z.enum(['done', 'today', 'upcoming', 'missed']),
-        }),
-      ),
-    })
-    .nullable(),
+  /**
+   * Every course the patient is on, grouped by what it treats.
+   *
+   * An array, not a single "primary" condition. Showing one meant that adding a
+   * prescription made the previous one disappear from this screen — which reads
+   * as the app having replaced it. People see different doctors for different
+   * things; the home screen has to hold more than one at a time.
+   */
+  courseGroups: z.array(TodayCourseGroupSchema),
 });
 export type TodayResponse = z.infer<typeof TodayResponseSchema>;
 

@@ -420,6 +420,16 @@ textarea {
   background: var(--amber-bg);
   border: 1.5px solid var(--amber);
 }
+/*
+ * A note, not an instruction. Same colour family as the action card but far
+ * quieter — two full amber cards stacked compete for the same attention, and
+ * the one that must win is always the dose.
+ */
+.card--note {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-left: 5px solid var(--amber);
+}
 .card--red {
   background: var(--red-bg);
   border: 1.5px solid var(--red);
