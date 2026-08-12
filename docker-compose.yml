@@ -1,0 +1,16 @@
+services:
+  mongo:
+    image: mongo:7
+    container_name: medication-ai-mongo
+    restart: unless-stopped
+    ports:
+      # Deliberately not 27017. A MongoDB already running on the host binds
+      # 127.0.0.1:27017 specifically, which beats Docker's 0.0.0.0 binding —
+      # so a clash does not fail loudly, it silently sends every read and
+      # write to the wrong database. A distinct port removes the ambiguity.
+      - "27018:27017"
+    volumes:
+      - mongo-data:/data/db
+
+volumes:
+  mongo-data:

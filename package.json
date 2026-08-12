@@ -1,0 +1,32 @@
+{
+  "name": "medication-ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Medication agent — turns a prescription into a finished course.",
+  "workspaces": [
+    "packages/shared",
+    "packages/server",
+    "packages/web"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "concurrently -n server,web -c green,cyan \"npm run dev -w @medication-ai/server\" \"npm run dev -w @medication-ai/web\"",
+    "dev:server": "npm run dev -w @medication-ai/server",
+    "dev:web": "npm run dev -w @medication-ai/web",
+    "build": "npm run build -w @medication-ai/server && npm run build -w @medication-ai/web",
+    "typecheck": "npm run typecheck -w @medication-ai/shared && npm run typecheck -w @medication-ai/server && npm run typecheck -w @medication-ai/web",
+    "test": "npm run test -w @medication-ai/shared && npm run test -w @medication-ai/server",
+    "seed": "npm run seed -w @medication-ai/server",
+    "vapid": "npm run vapid -w @medication-ai/server",
+    "mongo:up": "docker compose up -d mongo",
+    "mongo:down": "docker compose down",
+    "verify": "npm run typecheck && npm run test && npm run build"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3"
+  }
+}

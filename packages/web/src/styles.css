@@ -1,0 +1,877 @@
+/*
+ * The design's visual language, as tokens.
+ *
+ * Type and target sizes are deliberately large throughout: the brief is a
+ * low-tech patient in her seventies, so nothing interactive is under 44px and
+ * body copy does not go below 15px.
+ */
+:root {
+  --ink: #16211c;
+  --ink-soft: #7a837d;
+  --ink-faint: #9ba39d;
+
+  --canvas: #ede7dd;
+  --app-bg: #faf7f1;
+  --card: #ffffff;
+  --card-border: rgba(0, 0, 0, 0.07);
+  --sand: #f4f1ea;
+
+  --green: #1f7a5c;
+  --green-dark: #155a43;
+  --green-bg: #e2f0ea;
+  --green-text: #4a7a67;
+  --mint: #8fd3b6;
+
+  --amber: #e8a33d;
+  --amber-bg: #fdf0dc;
+  --amber-ink: #8a5a12;
+  --amber-soft: #a07535;
+
+  --red: #c4553c;
+  --red-bg: #f9e4df;
+  --red-ink: #8c4636;
+
+  --radius-lg: 24px;
+  --radius-md: 18px;
+  --radius-sm: 12px;
+
+  --font: 'Nunito Sans', system-ui, -apple-system, sans-serif;
+
+  --sidebar-w: 264px;
+  --content-max: 720px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+}
+
+body {
+  background: var(--app-bg);
+  font-family: var(--font);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: none;
+}
+
+button {
+  font-family: inherit;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: inherit;
+}
+
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+@keyframes pop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(31, 122, 92, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 14px rgba(31, 122, 92, 0);
+  }
+}
+
+/* The attention cue on the Today tab. Colour and scale together, so it still
+   reads for someone who cannot distinguish the red. */
+@keyframes attention-blink {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.82);
+  }
+}
+
+@keyframes attention-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(196, 85, 60, 0.55);
+  }
+  70% {
+    box-shadow: 0 0 0 12px rgba(196, 85, 60, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(196, 85, 60, 0);
+  }
+}
+
+@keyframes slide-up {
+  from {
+    transform: translateY(14px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/*
+ * Reduced motion still needs the attention cue, so the blink is replaced by a
+ * solid red dot rather than removed — the information survives, the movement
+ * does not.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* ========================================================================== */
+/* Shell                                                                      */
+/* ========================================================================== */
+
+.app {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  background: var(--app-bg);
+}
+
+.sidebar {
+  display: none;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.pad {
+  padding: 8px 20px 28px;
+  padding-bottom: calc(28px + env(safe-area-inset-bottom));
+}
+
+.status-bar {
+  height: 44px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: env(safe-area-inset-top) 26px 0 26px;
+  font: 800 14px/1 var(--font);
+  color: var(--ink);
+}
+
+/* --- Desktop / tablet ----------------------------------------------------- */
+
+@media (min-width: 900px) {
+  .app {
+    background: var(--canvas);
+  }
+
+  /* A phone status bar is a lie on a laptop. */
+  .status-bar {
+    display: none;
+  }
+
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: var(--sidebar-w);
+    flex: none;
+    padding: 28px 18px;
+    background: var(--card);
+    border-right: 1px solid var(--card-border);
+    position: sticky;
+    top: 0;
+    height: 100vh;
+  }
+
+  .main {
+    background: var(--app-bg);
+  }
+
+  .pad {
+    max-width: var(--content-max);
+    margin: 0 auto;
+    width: 100%;
+    padding: 40px 32px 64px;
+  }
+}
+
+@media (min-width: 1400px) {
+  :root {
+    --content-max: 820px;
+  }
+}
+
+/* ========================================================================== */
+/* Navigation                                                                 */
+/* ========================================================================== */
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 10px 22px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 14px 14px;
+  border-radius: var(--radius-md);
+  font: 800 16px/1 var(--font);
+  color: var(--ink-soft);
+  text-align: left;
+  position: relative;
+}
+.nav-item:hover {
+  background: var(--sand);
+}
+.nav-item--active {
+  background: var(--green-bg);
+  color: var(--green);
+}
+.nav-item .tab-icon {
+  font-size: 19px;
+  width: 22px;
+  text-align: center;
+}
+
+.tabbar {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  padding-top: 8px;
+  padding-bottom: env(safe-area-inset-bottom);
+  height: calc(78px + env(safe-area-inset-bottom));
+  background: var(--card);
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  position: sticky;
+  bottom: 0;
+}
+
+.tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 0;
+  color: #a8b0aa;
+  position: relative;
+  min-height: 60px;
+}
+.tab--active {
+  color: var(--green);
+}
+.tab-icon {
+  font: 400 21px/1 var(--font);
+  position: relative;
+}
+.tab-label {
+  font: 800 12px/1 var(--font);
+}
+
+/* The bottom bar is a phone idiom; on desktop the sidebar replaces it.
+   Declared after the base rule so source order lets it win. */
+@media (min-width: 900px) {
+  .tabbar {
+    display: none;
+  }
+}
+
+/*
+ * The attention cue: a red dot on the Today tab whenever a dose is waiting.
+ * It blinks because the whole product fails if she does not look at this tab.
+ */
+.attention-dot {
+  position: absolute;
+  top: -4px;
+  right: -9px;
+  width: 12px;
+  height: 12px;
+  border-radius: 6px;
+  background: var(--red);
+  border: 2px solid var(--card);
+  animation: attention-blink 1.1s ease-in-out infinite;
+}
+
+.tab--attention {
+  color: var(--red);
+}
+.tab--attention .tab-label {
+  color: var(--red);
+}
+.nav-item--attention {
+  background: var(--red-bg);
+  color: var(--red);
+  animation: attention-ring 1.6s ease-out infinite;
+}
+.nav-item--attention .attention-dot {
+  border-color: var(--red-bg);
+}
+
+/* ========================================================================== */
+/* Type                                                                       */
+/* ========================================================================== */
+
+.h1 {
+  font: 900 29px/1.2 var(--font);
+  margin: 0;
+}
+.h2 {
+  font: 900 19px/1.25 var(--font);
+  margin: 0;
+}
+.h3 {
+  font: 900 17px/1.25 var(--font);
+  margin: 0;
+}
+.sub {
+  font: 400 15.5px/1.45 var(--font);
+  color: var(--ink-soft);
+  margin: 4px 0 0;
+}
+.eyebrow {
+  font: 800 12px/1 var(--font);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.muted {
+  color: var(--ink-soft);
+}
+
+@media (min-width: 900px) {
+  .h1 {
+    font-size: 34px;
+  }
+}
+
+/* ========================================================================== */
+/* Cards                                                                      */
+/* ========================================================================== */
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+}
+.card + .card {
+  margin-top: 12px;
+}
+.card--dark {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #fff;
+}
+.card--amber {
+  background: var(--amber-bg);
+  border: 1.5px solid var(--amber);
+}
+.card--red {
+  background: var(--red-bg);
+  border: 1.5px solid var(--red);
+}
+.card--green {
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
+}
+.card--tap {
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  display: block;
+}
+.card--tap:hover {
+  border-color: rgba(0, 0, 0, 0.16);
+}
+
+/* ========================================================================== */
+/* Buttons                                                                    */
+/* ========================================================================== */
+
+.btn {
+  width: 100%;
+  min-height: 62px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 900 20px/1.2 var(--font);
+  gap: 8px;
+  padding: 12px 20px;
+  text-align: center;
+}
+.btn--primary {
+  background: var(--green);
+  color: #fff;
+}
+.btn--primary:hover {
+  background: var(--green-dark);
+}
+.btn--pulse {
+  animation: pulse 2.4s ease-out infinite;
+}
+.btn--ghost {
+  background: var(--card);
+  border: 1.5px solid rgba(0, 0, 0, 0.14);
+  color: var(--ink);
+  font-weight: 800;
+  font-size: 17px;
+  min-height: 56px;
+}
+.btn--ghost:hover {
+  border-color: rgba(0, 0, 0, 0.28);
+}
+.btn--onDark {
+  background: transparent;
+  border: 1.5px solid #3a453f;
+  color: #c6cec8;
+  font-weight: 800;
+  font-size: 17px;
+  min-height: 56px;
+}
+.btn--white {
+  background: #fff;
+  color: var(--green);
+  min-height: 58px;
+  width: auto;
+  padding: 0 40px;
+  font-size: 18px;
+}
+.btn--danger {
+  background: var(--red);
+  color: #fff;
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn-row {
+  display: flex;
+  gap: 12px;
+}
+.btn-row > .btn {
+  flex: 1;
+}
+
+.back {
+  font: 800 16px/1 var(--font);
+  color: var(--ink-soft);
+  padding: 10px 0;
+  display: block;
+  text-align: left;
+  align-self: flex-start;
+}
+.back--onDark {
+  color: #8b948d;
+}
+
+/* ========================================================================== */
+/* Pills, rows, progress                                                      */
+/* ========================================================================== */
+
+.pill {
+  font: 800 11.5px/1 var(--font);
+  border-radius: 20px;
+  padding: 7px 10px;
+  white-space: nowrap;
+  display: inline-block;
+}
+.pill--green {
+  color: var(--green);
+  background: var(--green-bg);
+}
+.pill--amber {
+  color: var(--amber-ink);
+  background: var(--amber-bg);
+}
+.pill--red {
+  color: var(--red);
+  background: var(--red-bg);
+}
+.pill--grey {
+  color: var(--ink-soft);
+  background: var(--canvas);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+}
+.row-card {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  width: 100%;
+  text-align: left;
+}
+.dot {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 16px;
+  font: 900 14px/32px var(--font);
+  text-align: center;
+}
+.dot--green {
+  background: var(--green-bg);
+  color: var(--green);
+}
+.dot--amber {
+  background: var(--amber-bg);
+  color: #b0791f;
+}
+.dot--red {
+  background: var(--red-bg);
+  color: var(--red);
+}
+.dot--grey {
+  background: var(--canvas);
+  color: var(--ink-soft);
+}
+
+.bar {
+  height: 10px;
+  border-radius: 5px;
+  background: var(--canvas);
+  overflow: hidden;
+}
+.bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 5px;
+  background: var(--green);
+}
+
+.daycells {
+  display: flex;
+  gap: 6px;
+  margin-top: 16px;
+}
+.daycell {
+  flex: 1;
+  height: 38px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 800 13px/1 var(--font);
+}
+.daycell--done {
+  background: var(--green);
+  color: #fff;
+}
+.daycell--today {
+  background: var(--amber);
+  color: var(--ink);
+}
+.daycell--missed {
+  background: var(--red);
+  color: #fff;
+}
+.daycell--upcoming {
+  background: var(--canvas);
+  color: var(--ink-faint);
+}
+
+/* ========================================================================== */
+/* Overlays — full screen on a phone, a modal on a desktop                    */
+/* ========================================================================== */
+
+.overlay-root {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  animation: fade-in 0.18s ease-out both;
+}
+
+.overlay {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: calc(20px + env(safe-area-inset-top)) 22px calc(24px + env(safe-area-inset-bottom));
+  animation: slide-up 0.22s ease-out both;
+  overflow-y: auto;
+}
+.overlay--light {
+  background: var(--app-bg);
+}
+.overlay--dark {
+  background: var(--ink);
+  color: #fff;
+}
+.overlay--green {
+  background: var(--green);
+  color: #fff;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 20px;
+}
+
+@media (min-width: 900px) {
+  .overlay-root {
+    background: rgba(22, 33, 28, 0.45);
+    align-items: center;
+    justify-content: center;
+    padding: 40px;
+  }
+  .overlay {
+    flex: none;
+    width: min(620px, 100%);
+    max-height: 100%;
+    border-radius: 28px;
+    padding: 32px;
+    box-shadow: 0 30px 70px rgba(0, 0, 0, 0.3);
+  }
+  .overlay--green {
+    padding: 56px 40px;
+  }
+}
+
+/* ========================================================================== */
+/* Forms                                                                      */
+/* ========================================================================== */
+
+.field {
+  display: block;
+  margin-bottom: 16px;
+}
+.field-label {
+  display: block;
+  font: 800 13px/1 var(--font);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin-bottom: 8px;
+}
+.field-hint {
+  font: 400 13.5px/1.4 var(--font);
+  color: var(--ink-faint);
+  margin-top: 6px;
+}
+.input,
+.select,
+.textarea {
+  width: 100%;
+  min-height: 56px;
+  border-radius: var(--radius-sm);
+  border: 1.5px solid rgba(0, 0, 0, 0.14);
+  background: var(--card);
+  padding: 14px 16px;
+  font: 600 17px/1.35 var(--font);
+  color: var(--ink);
+}
+.input:focus,
+.select:focus,
+.textarea:focus,
+.btn:focus-visible,
+.nav-item:focus-visible,
+.tab:focus-visible,
+.card--tap:focus-visible,
+.choice:focus-visible {
+  outline: 3px solid var(--green);
+  outline-offset: 2px;
+}
+.textarea {
+  min-height: 100px;
+  resize: vertical;
+}
+.select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='9' viewBox='0 0 14 9'%3E%3Cpath d='M1 1l6 6 6-6' stroke='%237A837D' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 18px center;
+  padding-right: 46px;
+}
+.field-row {
+  display: flex;
+  gap: 12px;
+}
+.field-row > .field {
+  flex: 1;
+}
+
+/* A big, tappable radio — no tiny native controls. */
+.choice {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  text-align: left;
+  padding: 16px 18px;
+  border-radius: var(--radius-md);
+  border: 1.5px solid rgba(0, 0, 0, 0.12);
+  background: var(--card);
+  margin-bottom: 10px;
+}
+.choice--selected {
+  border-color: var(--green);
+  border-width: 2px;
+  background: var(--green-bg);
+}
+.choice-mark {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 13px;
+  border: 2px solid rgba(0, 0, 0, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 900 14px/1 var(--font);
+  color: transparent;
+}
+.choice--selected .choice-mark {
+  border-color: var(--green);
+  background: var(--green);
+  color: #fff;
+}
+
+.steps {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 22px;
+}
+.step-pip {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--canvas);
+}
+.step-pip--done {
+  background: var(--green);
+}
+.step-pip--current {
+  background: var(--amber);
+}
+
+/* ========================================================================== */
+/* Misc                                                                       */
+/* ========================================================================== */
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.spread {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+.section-gap {
+  margin-top: 24px;
+}
+
+.banner {
+  padding: 14px 18px;
+  border-radius: var(--radius-md);
+  font: 700 15px/1.45 var(--font);
+}
+.banner--error {
+  background: var(--red-bg);
+  color: var(--red-ink);
+  border: 1.5px solid var(--red);
+}
+.banner--info {
+  background: var(--green-bg);
+  color: var(--green);
+  border: 1.5px solid var(--green);
+}
+
+.centre-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 60px 30px;
+  text-align: center;
+}
+
+/* Two-column grid for wide screens where content genuinely pairs up. */
+.grid-2 {
+  display: grid;
+  gap: 12px;
+}
+@media (min-width: 900px) {
+  .grid-2 {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
