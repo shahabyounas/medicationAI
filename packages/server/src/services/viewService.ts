@@ -407,10 +407,20 @@ export async function buildMedicines(patientId: string, now = new Date()): Promi
   const [conditions, courses, medications, prescriptions, doctors, openReports, selfCare] =
     await Promise.all([
       collections.conditions.find({ patientId }, { sort: { startedAt: -1 } }),
-      // Self-managed courses have their own list on this screen: a multivitamin
-      // is not a thing being treated, so grouping it under a condition would
-      // mean inventing one.
-      collections.courses.find({ patientId, origin: 'prescription' }),
+      /*
+       * Self-managed courses have their own list on this screen: a multivitamin
+       * is not a thing being treated, so grouping it under a condition would
+       * mean inventing one.
+       *
+       * Expressed as "not self" rather than "is prescribed" because `origin`
+       * is newer than the documents. A Mongo equality match does not match a
+       * document that lacks the field, so `origin: 'prescription'` silently
+       * dropped every course written before this field existed — which is to
+       * say, the whole Medicines screen went blank on any real database. Zod
+       * fills the default in on the way out; it cannot help a query on the way
+       * in.
+       */
+      collections.courses.find({ patientId, origin: { $ne: 'self' } }),
       collections.medications.find({}),
       collections.prescriptions.find({ patientId }),
       collections.doctors.find({ patientId }),

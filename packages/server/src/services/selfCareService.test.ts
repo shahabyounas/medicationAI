@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { collections } from '../db/collections.js';
 import { addSelfCare, flagAllergies, stopSelfCare } from './selfCareService.js';
+import { buildMedicines } from './viewService.js';
 import { tick } from '../agent/runner.js';
 import { deliveryChannel } from '../agent/channels.js';
 import {
@@ -358,5 +359,96 @@ describe('the allergy name check', () => {
     });
 
     expect(flagAllergies(patient, 'Soybean oil capsules')).toHaveLength(0);
+  });
+});
+
+describe('documents written before these fields existed', () => {
+  /**
+   * The bug a preview deploy against the real database found.
+   *
+   * `origin` is newer than the course documents. A Mongo equality match does
+   * not match a document that lacks the field, so filtering the Medicines
+   * screen on `origin: 'prescription'` silently dropped every course written
+   * before the field existed — the whole screen came back empty on any
+   * database that predated this change. Zod fills the default in on the way
+   * out of the driver; it cannot help a query on the way in.
+   */
+  it('still shows a course that has no origin field at all', async () => {
+    const scenario = await createScenario();
+
+    const course = await collections.courses.insert({
+      patientId: scenario.patient._id,
+      origin: 'prescription',
+      prescriptionId: null,
+      prescriptionItemId: null,
+      medicationId: scenario.amoxicillin._id,
+      medicationName: 'Amoxicillin',
+      conditionId: scenario.conditionId,
+      status: 'active',
+      frequency: { timesPerDay: 3, foodRule: 'after_food' },
+      amountPerDose: 1,
+      durationDays: 7,
+      totalDoses: 21,
+      startedAt: NOW,
+      expectedEndAt: null,
+      completedAt: null,
+      unitsRemaining: 21,
+      learnedDriftMinutes: 0,
+      stoppedReason: null,
+      pausedAt: null,
+      remindersOn: true,
+    });
+
+    // Strip the new fields, as a document from before this change would be.
+    await collections.courses.collection.updateOne(
+      { _id: course._id },
+      { $unset: { origin: '', remindersOn: '', pausedAt: '', stoppedReason: '' } },
+    );
+
+    const medicines = await buildMedicines(scenario.patient._id, NOW);
+    const names = medicines.active.flatMap((condition) =>
+      condition.courses.map((c) => c.medicationName),
+    );
+
+    expect(names).toContain('Amoxicillin');
+    // And it is not mistaken for something the patient added themselves.
+    expect(medicines.selfCare).toHaveLength(0);
+  });
+
+  /** The same hazard in the loop, which got it right: `$ne: false`. */
+  it('tops up a legacy open-ended course that has no remindersOn field', async () => {
+    const scenario = await createScenario();
+
+    const course = await collections.courses.insert({
+      patientId: scenario.patient._id,
+      origin: 'prescription',
+      prescriptionId: null,
+      prescriptionItemId: null,
+      medicationId: scenario.amoxicillin._id,
+      medicationName: 'Metformin',
+      conditionId: scenario.conditionId,
+      status: 'active',
+      frequency: { timesPerDay: 2, foodRule: 'with_food' },
+      amountPerDose: 1,
+      durationDays: null,
+      totalDoses: null,
+      startedAt: NOW,
+      expectedEndAt: null,
+      completedAt: null,
+      unitsRemaining: null,
+      learnedDriftMinutes: 0,
+      stoppedReason: null,
+      pausedAt: null,
+      remindersOn: true,
+    });
+
+    await collections.courses.collection.updateOne(
+      { _id: course._id },
+      { $unset: { remindersOn: '', origin: '' } },
+    );
+
+    await tick(NOW);
+
+    expect(await collections.doses.count({ courseId: course._id })).toBeGreaterThan(0);
   });
 });
