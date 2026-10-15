@@ -14,6 +14,7 @@ import {
   type Dose,
   type DoseLogEntry,
   type HistoryEntry,
+  type HistoryEpisode,
   type HistoryResponse,
   type HistoryYear,
   type MedicationForm,
@@ -97,14 +98,11 @@ export async function buildHistory(patientId: string, now = new Date()): Promise
   const conditionNames = new Map(conditions.map((condition) => [condition._id, condition.name]));
   const prescriptionsById = new Map(prescriptions.map((p) => [p._id, p]));
 
-  // Only the courses that ended need their counts, and those are the entries
-  // that would otherwise read "Stopped Penicillin V" with no idea how far in.
-  const endedCourses = courses.filter(
-    (course) => course.status === 'completed' || course.status === 'stopped_early',
-  );
+  // Every course's taken count: the ended ones so an entry can say how far in
+  // it got, and the running ones so an episode card can carry "8 of 21".
   const takenByCourse = new Map<string, number>(
     await Promise.all(
-      endedCourses.map(
+      courses.map(
         async (course) =>
           [
             course._id,
@@ -134,7 +132,11 @@ export async function buildHistory(patientId: string, now = new Date()): Promise
     nextDose: next ? toDoseView(next, tz, forms) : null,
     todayDoses: todaysDoses.map((dose) => toDoseView(dose, tz, forms)),
     waiting: await buildWaiting(patientId, now, tz),
-    years: groupByYear(entries, tz),
+    years: groupByYear(
+      entries,
+      buildEpisodes(conditions, courses, prescriptionsById, doctorNames, takenByCourse, now, tz),
+      tz,
+    ),
     totals: {
       conditions: conditions.length,
       visits: visits.length,
@@ -295,13 +297,120 @@ function courseEntries(
   return entries;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Episodes                                                                   */
+/* -------------------------------------------------------------------------- */
+
 /**
- * Entries into years and months, newest first.
+ * The illnesses, as cards.
+ *
+ * Built from the same conditions and courses the entries come from, so the two
+ * never disagree — the card is a reading of the record, not a second copy of
+ * it. A card states the thing a log line cannot: what the illness was, who
+ * treated it, how it ended, and how much of the course was actually taken.
+ */
+function buildEpisodes(
+  conditions: readonly Condition[],
+  courses: readonly Course[],
+  prescriptionsById: Map<string, Prescription>,
+  doctorNames: Map<string, string>,
+  takenByCourse: Map<string, number>,
+  now: Date,
+  timeZone: string,
+): HistoryEpisode[] {
+  return conditions.map((condition) => {
+    const theirs = courses.filter((course) => course.conditionId === condition._id);
+    const first = theirs[0];
+    const prescription = first ? prescriptionsById.get(first.prescriptionId) : undefined;
+
+    const taken = theirs.reduce((sum, course) => sum + (takenByCourse.get(course._id) ?? 0), 0);
+    // "Open-ended" only when nothing in it has a last dose: a repeat medicine
+    // alongside a 7-day course still has a finish line.
+    const openEnded = theirs.length > 0 && theirs.every((course) => course.totalDoses === null);
+    const totalDoses = openEnded
+      ? null
+      : theirs.reduce((sum, course) => sum + (course.totalDoses ?? 0), 0);
+
+    // Stopping early outranks being resolved: how it ended is the thing worth
+    // seeing, and it is what makes the illness that came back legible.
+    const state = theirs.some((course) => course.status === 'stopped_early')
+      ? 'stopped'
+      : condition.resolvedAt
+        ? 'cleared'
+        : condition.isChronic || openEnded
+          ? 'ongoing'
+          : 'in_progress';
+
+    return {
+      conditionId: condition._id,
+      name: condition.name,
+      occurredAt: condition.startedAt,
+      rangeLabel: rangeLabelFor(condition, timeZone),
+      doctorName: prescription ? (doctorNames.get(prescription.doctorId) ?? null) : null,
+      state,
+      stateLabel: stateLabelFor(state, condition, theirs, now, timeZone),
+      medicationNames: [...new Set(theirs.map((course) => course.medicationName))],
+      takenCount: taken,
+      totalDoses,
+      percentComplete:
+        totalDoses && totalDoses > 0 ? Math.min(100, Math.round((taken / totalDoses) * 100)) : 0,
+    };
+  });
+}
+
+/** "10 October → now", "2 – 7 May", "11 February – 3 March". */
+function rangeLabelFor(condition: Condition, timeZone: string): string {
+  const from = formatDayMonth(condition.startedAt, timeZone);
+  if (!condition.resolvedAt) return `${from} → now`;
+
+  const start = wallClockIn(condition.startedAt, timeZone);
+  const end = wallClockIn(condition.resolvedAt, timeZone);
+  const to = formatDayMonth(condition.resolvedAt, timeZone);
+
+  // Within one month the month name only needs saying once.
+  return start.year === end.year && start.month === end.month
+    ? `${start.day} – ${to}`
+    : `${from} – ${to}`;
+}
+
+function stateLabelFor(
+  state: HistoryEpisode['state'],
+  condition: Condition,
+  courses: readonly Course[],
+  now: Date,
+  timeZone: string,
+): string {
+  if (state === 'cleared') return 'Cleared';
+  if (state === 'stopped') return 'Stopped';
+
+  if (state === 'ongoing') {
+    const years = Math.floor(
+      Math.max(0, calendarDaysBetween(condition.startedAt, now, timeZone)) / 365,
+    );
+    return years >= 1 ? `Ongoing · ${years} ${years === 1 ? 'year' : 'years'}` : 'Ongoing';
+  }
+
+  // "Day 5 of 7" is the sentence a patient mid-course actually wants.
+  const running = courses.find((course) => course.durationDays !== null && course.startedAt);
+  if (!running?.startedAt || running.durationDays === null) return 'In progress';
+
+  const day = Math.max(1, calendarDaysBetween(running.startedAt, now, timeZone) + 1);
+  return day > running.durationDays
+    ? 'In progress'
+    : `Day ${day} of ${running.durationDays}`;
+}
+
+/**
+ * Entries into years and months, newest first, with each year's episodes.
  *
  * Grouped on the patient's wall clock rather than UTC's, so a dose taken at
  * 11pm on 31 December does not file itself under the following year.
  */
-function groupByYear(entries: readonly HistoryEntry[], timeZone: string): HistoryYear[] {
+function groupByYear(
+  entries: readonly HistoryEntry[],
+  episodes: readonly HistoryEpisode[],
+  timeZone: string,
+): HistoryYear[] {
   const byYear = new Map<number, Map<number, HistoryEntry[]>>();
 
   for (const entry of entries) {
@@ -317,6 +426,9 @@ function groupByYear(entries: readonly HistoryEntry[], timeZone: string): Histor
       year,
       label: String(year),
       entryCount: [...months.values()].reduce((sum, list) => sum + list.length, 0),
+      episodes: episodes
+        .filter((episode) => wallClockIn(episode.occurredAt, timeZone).year === year)
+        .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime()),
       months: [...months.entries()]
         .sort(([a], [b]) => b - a)
         .map(([month, list]) => ({
