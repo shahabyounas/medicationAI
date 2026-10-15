@@ -20,6 +20,7 @@ import {
 import { collections } from '../db/collections.js';
 import { ConflictError } from '../db/repository.js';
 import { logAgentEvent } from './agentEventService.js';
+import { flagAllergies } from './selfCareService.js';
 
 /**
  * Everything that happens between "a prescription arrived" and "the agent has a
@@ -61,6 +62,13 @@ export async function buildPrescriptionDetail(
     conditionName: condition?.name ?? null,
     readBack,
     spacingNote: buildSpacingNote(prescription.items, medications),
+    // Repeated on the read-back, which is the last screen before the clock
+    // starts and therefore the last chance to see it.
+    allergyFlags: [
+      ...new Set(
+        prescription.items.flatMap((item) => flagAllergies(patient, item.medicationName)),
+      ),
+    ],
   };
 }
 
@@ -209,6 +217,7 @@ export async function startPrescription(
 
     const course = await collections.courses.insert({
       patientId: prescription.patientId,
+      origin: 'prescription',
       prescriptionId: prescription._id,
       prescriptionItemId: item.id,
       medicationId: item.medicationId,
@@ -224,6 +233,9 @@ export async function startPrescription(
       completedAt: null,
       unitsRemaining: totalUnits,
       learnedDriftMinutes: 0,
+      stoppedReason: null,
+      pausedAt: null,
+      remindersOn: true,
     });
     courses.push(course);
 
@@ -243,6 +255,7 @@ export async function startPrescription(
         amount: item.amountPerDose,
         confirmedVia: null,
         rescheduledReason: null,
+        skipReason: null,
       });
     }
   }

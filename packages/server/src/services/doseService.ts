@@ -1,4 +1,6 @@
 import {
+  COURSE_STATUS_LABELS,
+  MEDICATION_FORM_UNITS,
   MINUTE_MS,
   ON_TIME_GRACE_MINUTES,
   afterTakeMessage,
@@ -7,7 +9,9 @@ import {
   countConsecutiveMisses,
   formatClockTime,
   learnDriftMinutes,
+  describeUnits,
   needsRefillWarning,
+  refillCollectedMessage,
   refillWarningMessage,
   rescheduledMessage,
   timeOnDay,
@@ -188,14 +192,20 @@ export async function snoozeDose(doseId: string, minutes = 30): Promise<DoseActi
  * against the streak — but the agent does not lecture, and the remaining doses
  * are replanned so the course can still be completed.
  */
-export async function skipDose(doseId: string): Promise<DoseActionResult> {
+export async function skipDose(
+  doseId: string,
+  reason?: string,
+): Promise<DoseActionResult> {
   const dose = await collections.doses.requireById(doseId);
   if (dose.status === 'taken' || dose.status === 'taken_late') {
     throw new ConflictError('That dose is already recorded as taken');
   }
 
   const now = new Date();
-  const updated = await collections.doses.updateById(doseId, { status: 'skipped' });
+  const updated = await collections.doses.updateById(doseId, {
+    status: 'skipped',
+    skipReason: reason ?? null,
+  });
   await settleEscalation(doseId, 'resolved', now);
 
   const patient = await collections.patients.requireById(dose.patientId);
@@ -207,8 +217,10 @@ export async function skipDose(doseId: string): Promise<DoseActionResult> {
     courseId: dose.courseId,
     conditionId: dose.conditionId,
     channel: 'internal',
-    summary: `${formatClockTime(dose.scheduledAt, patient.timezone)} — ${dose.medicationName} skipped`,
-    message: null,
+    summary: `${formatClockTime(dose.scheduledAt, patient.timezone)} — ${
+      dose.medicationName
+    } skipped${reason ? ` (${reason})` : ''}`,
+    message: reason ?? null,
     escalationNodeId: null,
     visibleToFamily: true,
   });
@@ -218,6 +230,125 @@ export async function skipDose(doseId: string): Promise<DoseActionResult> {
     message: "Noted. Don't double up on the next one — take it as normal.",
     courseProgress: null,
     courseCompleted: false,
+  };
+}
+
+/**
+ * "I've collected more."
+ *
+ * `needsRefillWarning` and `unitsRemaining` have existed from the start, and
+ * nothing in the app ever put units *back*. So the warning fired once and could
+ * never be cleared: the patient was told they were running out every time they
+ * took a tablet, for the rest of the course, having already been to the chemist.
+ *
+ * The count is what the patient says it is rather than something added to a
+ * previous figure, because the only reliable way to know how many tablets are
+ * in a house is for somebody to look in the packet and count them.
+ */
+export async function recordRefill(
+  courseId: string,
+  unitsNow: number,
+): Promise<{ unitsRemaining: number; dosesRemaining: number; message: string }> {
+  const course = await collections.courses.requireById(courseId);
+  const medication = await collections.medications.findById(course.medicationId);
+  const form = medication?.form ?? 'tablet';
+
+  await collections.courses.updateById(courseId, { unitsRemaining: unitsNow });
+
+  const dosesRemaining = await collections.doses.count({
+    courseId,
+    status: { $in: ['scheduled', 'due'] },
+  });
+
+  const message = refillCollectedMessage({
+    medicationName: course.medicationName,
+    unitsNow,
+    dosesRemaining,
+    unit: unitsNow === 1 ? MEDICATION_FORM_UNITS[form].one : MEDICATION_FORM_UNITS[form].many,
+  });
+
+  await logAgentEvent({
+    patientId: course.patientId,
+    type: 'refill_collected',
+    occurredAt: new Date(),
+    doseId: null,
+    courseId,
+    conditionId: course.conditionId,
+    channel: 'internal',
+    summary: `${course.medicationName} — ${describeUnits(unitsNow, form)} on the shelf`,
+    message: null,
+    escalationNodeId: null,
+    visibleToFamily: true,
+  });
+
+  return { unitsRemaining: unitsNow, dosesRemaining, message };
+}
+
+/**
+ * End a prescribed course before its last dose.
+ *
+ * The agent does not decide this and the app does not advise it — but a patient
+ * whose doctor has told them to stop needs somewhere to say so, and the
+ * alternative is that they simply stop answering and the ladder chases them
+ * through every rung to their son. The reason is recorded because
+ * `stopped_early` with nothing attached is what made "I felt better" and "it
+ * was making me ill" indistinguishable on the record.
+ */
+export async function stopCourse(
+  courseId: string,
+  reason: string | undefined,
+  now = new Date(),
+): Promise<{ message: string; dosesCancelled: number }> {
+  const course = await collections.courses.requireById(courseId);
+  if (course.status !== 'active' && course.status !== 'not_started') {
+    throw new ConflictError(`That course is already ${COURSE_STATUS_LABELS[course.status].toLowerCase()}`);
+  }
+
+  const outstanding = await collections.doses.find({
+    courseId,
+    status: { $in: ['scheduled', 'due'] },
+  });
+  for (const dose of outstanding) {
+    await settleEscalation(dose._id, 'resolved', now);
+  }
+  await collections.doses.deleteMany({ courseId, status: { $in: ['scheduled', 'due'] } });
+
+  const takenCount = await collections.doses.count({
+    courseId,
+    status: { $in: ['taken', 'taken_late'] },
+  });
+
+  await collections.courses.updateById(courseId, {
+    status: 'stopped_early',
+    completedAt: now,
+    stoppedReason: reason ?? null,
+    pausedAt: null,
+  });
+
+  await logAgentEvent({
+    patientId: course.patientId,
+    type: 'course_stopped',
+    occurredAt: now,
+    doseId: null,
+    courseId,
+    conditionId: course.conditionId,
+    channel: 'internal',
+    summary:
+      course.totalDoses === null
+        ? `${course.medicationName} stopped after ${takenCount} ${
+            takenCount === 1 ? 'dose' : 'doses'
+          }${reason ? ` — ${reason}` : ''}`
+        : `${course.medicationName} stopped with ${
+            course.totalDoses - takenCount
+          } of ${course.totalDoses} doses not taken${reason ? ` — ${reason}` : ''}`,
+    message: reason ?? null,
+    escalationNodeId: null,
+    visibleToFamily: true,
+  });
+
+  return {
+    message: `${course.medicationName} stopped. It stays on your record, with the reason.`,
+    dosesCancelled: outstanding.length,
   };
 }
 

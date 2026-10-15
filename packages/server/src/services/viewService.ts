@@ -1,4 +1,6 @@
 import {
+  SIDE_EFFECT_SEVERITY_LABELS,
+  formatDayMonth,
   COURSE_STATUS_LABELS,
   DOSE_STATUS_LABELS,
   buildCourseProgress,
@@ -27,6 +29,8 @@ import {
 import { collections } from '../db/collections.js';
 import { eventsSince, familyVisibleEvents } from './agentEventService.js';
 import { describeItem, totalUnitsFor } from './prescriptionService.js';
+import { openSideEffectsFor } from './sideEffectService.js';
+import { buildSelfCare } from './selfCareService.js';
 
 /**
  * Read models for the screens.
@@ -259,7 +263,9 @@ async function buildFeelBetterNudge(
 
   const remaining = group.remainingCount ?? 0;
 
-  const prescription = await collections.prescriptions.findById(course.prescriptionId);
+  const prescription = course.prescriptionId
+    ? await collections.prescriptions.findById(course.prescriptionId)
+    : null;
   const doctor = prescription ? await collections.doctors.findById(prescription.doctorId) : null;
   const medication = await collections.medications.findById(course.medicationId);
 
@@ -398,13 +404,29 @@ function buildDayCells(
 /** The Medicines screen: everything grouped under the condition it treats. */
 export async function buildMedicines(patientId: string, now = new Date()): Promise<MedicinesResponse> {
   const patient = await collections.patients.requireById(patientId);
-  const [conditions, courses, medications, prescriptions, doctors] = await Promise.all([
-    collections.conditions.find({ patientId }, { sort: { startedAt: -1 } }),
-    collections.courses.find({ patientId }),
-    collections.medications.find({}),
-    collections.prescriptions.find({ patientId }),
-    collections.doctors.find({ patientId }),
-  ]);
+  const [conditions, courses, medications, prescriptions, doctors, openReports, selfCare] =
+    await Promise.all([
+      collections.conditions.find({ patientId }, { sort: { startedAt: -1 } }),
+      /*
+       * Self-managed courses have their own list on this screen: a multivitamin
+       * is not a thing being treated, so grouping it under a condition would
+       * mean inventing one.
+       *
+       * Expressed as "not self" rather than "is prescribed" because `origin`
+       * is newer than the documents. A Mongo equality match does not match a
+       * document that lacks the field, so `origin: 'prescription'` silently
+       * dropped every course written before this field existed — which is to
+       * say, the whole Medicines screen went blank on any real database. Zod
+       * fills the default in on the way out; it cannot help a query on the way
+       * in.
+       */
+      collections.courses.find({ patientId, origin: { $ne: 'self' } }),
+      collections.medications.find({}),
+      collections.prescriptions.find({ patientId }),
+      collections.doctors.find({ patientId }),
+      openSideEffectsFor(patientId),
+      buildSelfCare(patientId, now),
+    ]);
 
   const medicationsById = new Map(medications.map((m) => [m._id, m]));
   const doctorsById = new Map(doctors.map((d) => [d._id, d]));
@@ -420,6 +442,8 @@ export async function buildMedicines(patientId: string, now = new Date()): Promi
       theirCourses.map(async (course) => {
         const doses = await collections.doses.find({ courseId: course._id });
         const medication = medicationsById.get(course.medicationId);
+        const report = openReports.find((r) => r.courseId === course._id);
+
         return {
           ...course,
           progress: buildCourseProgress({
@@ -432,10 +456,20 @@ export async function buildMedicines(patientId: string, now = new Date()): Promi
             doses,
             timeZone: patient.timezone,
             now,
+            paused: course.pausedAt !== null,
           }),
           medicationPurpose: medication?.purpose ?? null,
           medicationForm: medication?.form ?? 'tablet',
           instructionLine: instructionLineFor(course, medication?.form ?? 'tablet'),
+          dosesRemaining: doses.filter(
+            (dose) => dose.status === 'scheduled' || dose.status === 'due',
+          ).length,
+          paused: course.pausedAt !== null,
+          pausedNote: report
+            ? `Reminders are off while you sort out "${report.symptom}".`
+            : course.pausedAt !== null
+              ? 'Reminders are off for this one.'
+              : null,
         };
       }),
     );
@@ -443,7 +477,9 @@ export async function buildMedicines(patientId: string, now = new Date()): Promi
     const totalDoses = enriched.reduce((sum, c) => sum + (c.totalDoses ?? 0), 0);
     const takenDoses = enriched.reduce((sum, c) => sum + c.progress.takenCount, 0);
     const firstCourse = theirCourses[0];
-    const prescription = firstCourse ? prescriptionsById.get(firstCourse.prescriptionId) : undefined;
+    const prescription = firstCourse?.prescriptionId
+      ? prescriptionsById.get(firstCourse.prescriptionId)
+      : undefined;
     const doctorName = prescription ? (doctorsById.get(prescription.doctorId)?.name ?? null) : null;
 
     const startedAt = theirCourses.reduce<Date | null>(
@@ -471,7 +507,51 @@ export async function buildMedicines(patientId: string, now = new Date()): Promi
   return {
     active: summaries.filter((s) => !isFinished(s)),
     finished: summaries.filter(isFinished),
+    selfCare,
+    openSideEffects: openReports.map((report) => ({
+      reportId: report._id,
+      medicationName: report.medicationName,
+      symptom: report.symptom,
+      severity: report.severity,
+      severityLabel: SIDE_EFFECT_SEVERITY_LABELS[report.severity],
+      startedLabel: formatDayMonth(report.startedAt, patient.timezone),
+      chasingPaused: courses.some(
+        (course) => course._id === report.courseId && course.pausedAt !== null,
+      ),
+    })),
   };
+}
+
+/**
+ * What the patient said about getting better, next to what they took.
+ *
+ * The one sentence worth having on a report. When the two disagree — felt
+ * better on day 3, course abandoned on day 4 — that is the product's whole
+ * thesis, stated about this person rather than about patients in general. It
+ * never claims the medicine caused the improvement: it reports two things the
+ * patient told the app and leaves the inference alone.
+ */
+function outcomeLineFor(
+  start: number | null,
+  end: number | null,
+  feltBetterOnDay: number | null,
+  completedInFull: boolean,
+): string | null {
+  if (start === null || end === null) return null;
+
+  if (feltBetterOnDay !== null && !completedInFull) {
+    return `You said you were nearly back to normal on day ${feltBetterOnDay}, and the course was not finished. That is the pattern that brings an illness back.`;
+  }
+  if (feltBetterOnDay !== null && completedInFull) {
+    return `You felt nearly back to normal by day ${feltBetterOnDay} and still finished every dose. That is exactly the point.`;
+  }
+  if (end < start) {
+    return `You went from ${start} out of 10 to ${end} out of 10 over the course.`;
+  }
+  if (end > start) {
+    return `You were at ${start} out of 10 when this started and ${end} out of 10 at the end — worth telling your doctor.`;
+  }
+  return `You reported ${end} out of 10 at both ends of the course.`;
 }
 
 /** Exposed for the record screen: "1 tablet · 3 times a day · after food". */
@@ -537,9 +617,11 @@ export async function buildCourseReport(conditionId: string): Promise<CourseRepo
     type: 'family_notified',
   });
 
-  const firstCourse = courses[0];
-  const prescription = firstCourse
-    ? await collections.prescriptions.findById(firstCourse.prescriptionId)
+  // A condition can hold self-managed courses, which have no prescription and
+  // therefore no prescriber to name.
+  const prescribed = courses.find((course) => course.prescriptionId !== null);
+  const prescription = prescribed?.prescriptionId
+    ? await collections.prescriptions.findById(prescribed.prescriptionId)
     : null;
   const doctor = prescription ? await collections.doctors.findById(prescription.doctorId) : null;
 
@@ -556,6 +638,32 @@ export async function buildCourseReport(conditionId: string): Promise<CourseRepo
       c.completedAt && (latest === null || c.completedAt > latest) ? c.completedAt : latest,
     null,
   );
+
+  /**
+   * The outcome, as distinct from the pill count.
+   *
+   * The report could previously say twenty-one tablets went in and that the
+   * illness was resolved, while nobody had ever been asked whether they got
+   * better — `resolveConditionIfAllCoursesDone` infers that from the doses
+   * running out. These three fields are the answer to the question the report
+   * was actually pretending to have.
+   */
+  const [sideEffectReports, symptomEntries] = await Promise.all([
+    collections.sideEffects.find({ conditionId }, { sort: { reportedAt: 1 } }),
+    collections.symptoms.find({ conditionId }, { sort: { recordedAt: 1 } }),
+  ]);
+
+  const symptomStart = symptomEntries[0]?.severity ?? null;
+  const symptomEnd = symptomEntries.at(-1)?.severity ?? null;
+
+  const feltBetter = symptomEntries.find((entry) => entry.severity <= 2);
+  const feltBetterOnDay =
+    feltBetter && startedAt
+      ? Math.max(
+          1,
+          calendarDaysBetween(startedAt, feltBetter.recordedAt, patient.timezone) + 1,
+        )
+      : null;
 
   const medicationNames = [...new Set(courses.map((c) => c.medicationName))];
   const range =
@@ -575,6 +683,15 @@ export async function buildCourseReport(conditionId: string): Promise<CourseRepo
     missedCount: summary.missed,
     familyInterventions,
     completedInFull,
+    sideEffectCount: sideEffectReports.length,
+    sideEffectLines: sideEffectReports.map(
+      (report) =>
+        `${report.medicationName}: ${report.symptom} (${report.severity})`,
+    ),
+    symptomStart,
+    symptomEnd,
+    feltBetterOnDay,
+    outcomeLine: outcomeLineFor(symptomStart, symptomEnd, feltBetterOnDay, completedInFull),
     summaryLine: `${condition.name} · ${doctor?.name ?? 'Unknown doctor'} · ${range} · ${medicationNames.join(
       ' and ',
     )} · ${completedInFull ? 'completed in full' : `${summary.missed} doses not taken`}.`,

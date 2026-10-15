@@ -153,3 +153,26 @@ export function formatDayMonth(instant: Date, timeZone: string): string {
     month: 'long',
   }).format(instant);
 }
+
+/**
+ * "4 August", or "4 August 2019" when it is not this year.
+ *
+ * `formatDayMonth` drops the year on purpose: inside the record the year is
+ * the heading the entry sits under, so repeating it on every line is noise.
+ * Anywhere that heading is absent — a one-page summary handed to a clinician, a
+ * list of jabs going back a decade, a run of test results from three different
+ * years — dropping it makes two different dates print identically. A flu jab
+ * given on 9 October and due again on 9 October is not a useful sentence.
+ */
+export function formatDayMonthSmart(instant: Date, timeZone: string, now: Date): string {
+  const yearOf = (date: Date): string =>
+    new Intl.DateTimeFormat('en-GB', { timeZone, year: 'numeric' }).format(date);
+
+  const sameYear = yearOf(instant) === yearOf(now);
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    day: 'numeric',
+    month: 'long',
+    ...(sameYear ? {} : { year: 'numeric' }),
+  }).format(instant);
+}

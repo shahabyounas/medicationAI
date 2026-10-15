@@ -230,7 +230,9 @@ function courseEntries(
   const entries: HistoryEntry[] = [];
 
   for (const course of courses) {
-    const prescription = prescriptionsById.get(course.prescriptionId);
+    const prescription = course.prescriptionId
+      ? prescriptionsById.get(course.prescriptionId)
+      : undefined;
     const doctorName = prescription ? (doctorNames.get(prescription.doctorId) ?? null) : null;
     const conditionName = course.conditionId
       ? (conditionNames.get(course.conditionId) ?? null)
@@ -331,7 +333,9 @@ function buildEpisodes(
   return conditions.map((condition) => {
     const theirs = courses.filter((course) => course.conditionId === condition._id);
     const first = theirs[0];
-    const prescription = first ? prescriptionsById.get(first.prescriptionId) : undefined;
+    const prescription = first?.prescriptionId
+      ? prescriptionsById.get(first.prescriptionId)
+      : undefined;
 
     const taken = theirs.reduce((sum, course) => sum + (takenByCourse.get(course._id) ?? 0), 0);
     // "Open-ended" only when nothing in it has a last dose: a repeat medicine

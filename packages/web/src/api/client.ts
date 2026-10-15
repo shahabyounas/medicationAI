@@ -1,5 +1,24 @@
 import {
   AgentTickResponseSchema,
+  AppointmentSchema,
+  AppointmentsResponseSchema,
+  DocumentResponseSchema,
+  HealthDocumentSummarySchema,
+  ImmunisationSchema,
+  InsightsResponseSchema,
+  LabResultSchema,
+  ProfileResponseSchema,
+  ReadingSchema,
+  ReadingsResponseSchema,
+  ReportSideEffectResponseSchema,
+  ResultsResponseSchema,
+  SelfCareIntakeResponseSchema,
+  ShareSummaryResponseSchema,
+  SideEffectReportSchema,
+  SideEffectsResponseSchema,
+  SymptomEntrySchema,
+  RefillResponseSchema,
+  UpdateProfileResponseSchema,
   ConditionHistorySchema,
   CourseReportSchema,
   HistoryResponseSchema,
@@ -14,6 +33,26 @@ import {
   TodayResponseSchema,
   VisitsResponseSchema,
   type AgentTickResponse,
+  type AppointmentsResponse,
+  type CreateAppointmentRequest,
+  type CreateImmunisationRequest,
+  type CreateLabResultRequest,
+  type DocumentResponse,
+  type InsightsResponse,
+  type ProfileResponse,
+  type ReadingsResponse,
+  type RecordReadingRequest,
+  type RecordSymptomRequest,
+  type ReportSideEffectRequest,
+  type ReportSideEffectResponse,
+  type ResultsResponse,
+  type SelfCareIntakeRequest,
+  type SelfCareIntakeResponse,
+  type ShareSummaryResponse,
+  type SideEffectsResponse,
+  type UpdateProfileRequest,
+  type UpdateProfileResponse,
+  type UploadDocumentRequest,
   type ConditionHistory,
   type CourseReport,
   type HistoryResponse,
@@ -147,11 +186,137 @@ export const api = {
       body: JSON.stringify({ minutes }),
     }),
 
-  skipDose: (doseId: string): Promise<DoseActionResponse> =>
+  /**
+   * Skipping a dose, with the reason when there is one.
+   *
+   * Optional on purpose: demanding a reason before letting somebody skip a
+   * tablet teaches them to lie to the app. But offered, because the record
+   * could not previously tell "I felt better" from "it was making me ill".
+   */
+  skipDose: (doseId: string, reason?: string): Promise<DoseActionResponse> =>
     request(`/doses/${doseId}/skip`, DoseActionResponseSchema, {
+      method: 'POST',
+      body: JSON.stringify(reason ? { reason } : {}),
+    }),
+
+  /* --- The outcome side of the record ---------------------------------- */
+
+  insights: (patientId: string): Promise<InsightsResponse> =>
+    request(`/patients/${patientId}/insights`, InsightsResponseSchema),
+
+  readings: (patientId: string): Promise<ReadingsResponse> =>
+    request(`/patients/${patientId}/readings`, ReadingsResponseSchema),
+
+  appointments: (patientId: string): Promise<AppointmentsResponse> =>
+    request(`/patients/${patientId}/appointments`, AppointmentsResponseSchema),
+
+  sideEffects: (patientId: string): Promise<SideEffectsResponse> =>
+    request(`/patients/${patientId}/side-effects`, SideEffectsResponseSchema),
+
+  results: (patientId: string): Promise<ResultsResponse> =>
+    request(`/patients/${patientId}/results`, ResultsResponseSchema),
+
+  shareSummary: (patientId: string): Promise<ShareSummaryResponse> =>
+    request(`/patients/${patientId}/share`, ShareSummaryResponseSchema),
+
+  profile: (patientId: string): Promise<ProfileResponse> =>
+    request(`/patients/${patientId}/profile`, ProfileResponseSchema),
+
+  updateProfile: (patientId: string, body: UpdateProfileRequest): Promise<UpdateProfileResponse> =>
+    request(`/patients/${patientId}/profile`, UpdateProfileResponseSchema, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
+  /** "This medicine is making me feel worse." */
+  reportSideEffect: (body: ReportSideEffectRequest): Promise<ReportSideEffectResponse> =>
+    request('/side-effects', ReportSideEffectResponseSchema, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  updateSideEffect: (reportId: string, body: { resolved?: boolean; doctorInformed?: boolean }) =>
+    request(`/side-effects/${reportId}`, SideEffectReportSchema, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
+  /** "The doctor said carry on" — put the reminders back on. */
+  resumeChasing: (courseId: string) =>
+    request(`/courses/${courseId}/resume`, z.object({ message: z.string() }), {
       method: 'POST',
       body: JSON.stringify({}),
     }),
+
+  recordRefill: (courseId: string, unitsNow: number) =>
+    request(`/courses/${courseId}/refill`, RefillResponseSchema, {
+      method: 'POST',
+      body: JSON.stringify({ unitsNow }),
+    }),
+
+  stopCourse: (courseId: string, reason?: string) =>
+    request(
+      `/courses/${courseId}/stop`,
+      z.object({ message: z.string(), dosesCancelled: z.number() }),
+      { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) },
+    ),
+
+  /** Something the patient takes that no doctor prescribed. */
+  addSelfCare: (body: SelfCareIntakeRequest): Promise<SelfCareIntakeResponse> =>
+    request('/self-care', SelfCareIntakeResponseSchema, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  stopSelfCare: (courseId: string, reason?: string) =>
+    request(
+      `/self-care/${courseId}/stop`,
+      z.object({ message: z.string(), dosesCancelled: z.number() }),
+      { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) },
+    ),
+
+  recordReading: (body: RecordReadingRequest) =>
+    request('/readings', z.object({ reading: ReadingSchema, message: z.string() }), {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  deleteReading: (readingId: string) =>
+    fetch(`/api/readings/${readingId}`, { method: 'DELETE' }).then(() => undefined),
+
+  recordSymptom: (body: RecordSymptomRequest) =>
+    request('/symptoms', z.object({ entry: SymptomEntrySchema, message: z.string() }), {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  createAppointment: (body: CreateAppointmentRequest) =>
+    request('/appointments', AppointmentSchema, { method: 'POST', body: JSON.stringify(body) }),
+
+  /** Turn a visit's follow-up date into a real, reminded appointment. */
+  appointmentFromVisit: (visitId: string) =>
+    request(`/visits/${visitId}/appointment`, AppointmentSchema, { method: 'POST' }),
+
+  setAppointmentStatus: (appointmentId: string, status: 'attended' | 'missed' | 'cancelled') =>
+    request(`/appointments/${appointmentId}`, AppointmentSchema, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    }),
+
+  recordLabResult: (body: CreateLabResultRequest) =>
+    request('/lab-results', LabResultSchema, { method: 'POST', body: JSON.stringify(body) }),
+
+  recordImmunisation: (body: CreateImmunisationRequest) =>
+    request('/immunisations', ImmunisationSchema, { method: 'POST', body: JSON.stringify(body) }),
+
+  uploadDocument: (body: UploadDocumentRequest) =>
+    request('/documents', HealthDocumentSummarySchema, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  document: (documentId: string): Promise<DocumentResponse> =>
+    request(`/documents/${documentId}`, DocumentResponseSchema),
 
   /* --- Intake: a prescription arriving --------------------------------- */
 

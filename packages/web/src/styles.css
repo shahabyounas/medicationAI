@@ -43,6 +43,41 @@
 
   --sidebar-w: 264px;
   --content-max: 720px;
+
+  /*
+   * The chart palette.
+   *
+   * Validated rather than chosen: `--viz-series-1` is the brand green pushed
+   * just past the chroma floor (the UI green #1f7a5c reads as grey to the
+   * validator at 0.096 chroma), and the pair series-1 / series-2 clears the
+   * colourblind separation checks on a white card — worst case deutan ΔE 19.5,
+   * normal-vision ΔE 20.6.
+   *
+   * The dose states are a *status* palette, not a categorical one. Green
+   * against red is exactly the pair a red-green colourblind reader cannot
+   * separate, and it is the most important distinction in the app — so it is
+   * never carried by colour: every cell has a glyph, every legend names the
+   * state in words, and every chart has a numbers view.
+   *
+   * Amber deliberately never appears next to red in a dense chart: the two
+   * measure 9.5 ΔE apart to normal vision, below the floor at which anybody
+   * can tell two marks apart. It is kept for warnings on cards, where it sits
+   * alone.
+   */
+  --viz-series-1: #00805a;
+  --viz-series-2: #2a78d6;
+  --viz-good: #00805a;
+  --viz-good-bg: #dcefe6;
+  --viz-bad: #c4553c;
+  --viz-bad-bg: #f7e2dc;
+  --viz-warn: #b07512;
+  --viz-warn-bg: #fbeed6;
+  --viz-neutral: #76817b;
+  --viz-neutral-bg: #e9e7e1;
+  --viz-grid: rgba(22, 33, 28, 0.09);
+  --viz-track: #ece9e2;
+  --viz-pending: rgba(22, 33, 28, 0.22);
+  --viz-band: rgba(42, 120, 214, 0.1);
 }
 
 * {
@@ -1000,4 +1035,538 @@ textarea {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* ========================================================================== */
+/* Charts                                                                     */
+/* ========================================================================== */
+
+/*
+ * The frame every chart sits in.
+ *
+ * Hairline chrome and generous padding on purpose: these cards are read by
+ * somebody who is unwell, not scanned on a trading desk. The "Numbers" toggle
+ * is part of the frame rather than each chart, so the accessible twin cannot be
+ * the thing that gets forgotten on the eleventh chart.
+ */
+.viz {
+  margin: 0 0 14px;
+  padding: 16px 16px 14px;
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+}
+
+.viz__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.viz__title {
+  font: 800 16.5px/1.25 var(--font);
+  color: var(--ink);
+}
+
+.viz__caption {
+  font: 600 13.5px/1.4 var(--font);
+  color: var(--ink-soft);
+  margin-top: 3px;
+}
+
+.viz__note {
+  font: 600 13.5px/1.45 var(--font);
+  color: var(--ink-soft);
+  margin-top: 11px;
+  padding-top: 11px;
+  border-top: 1px solid var(--card-border);
+}
+
+.viz__toggle {
+  flex: none;
+  min-height: 32px;
+  padding: 0 13px;
+  border-radius: 16px;
+  background: var(--sand);
+  color: var(--ink-soft);
+  font: 800 13px/1 var(--font);
+}
+
+.viz__toggle[aria-pressed='true'] {
+  background: var(--ink);
+  color: #fff;
+}
+
+.viz__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.viz__legend li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 700 12.5px/1.3 var(--font);
+  color: var(--ink-soft);
+}
+
+.viz-swatch {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+.viz-swatch--line {
+  height: 3px;
+  border-radius: 2px;
+}
+
+.viz-swatch--dashed {
+  height: 0;
+  width: 14px;
+  border-radius: 0;
+  border-top: 2px dashed var(--viz-neutral);
+  background: none;
+}
+
+.viz-swatch--pending {
+  background: none;
+  border: 1.5px dashed var(--viz-pending);
+}
+
+.viz-swatch--band {
+  background: var(--viz-band);
+  border: 1px solid rgba(42, 120, 214, 0.3);
+}
+
+.viz-swatch--hatch {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--viz-neutral) 0 2px,
+    var(--viz-neutral-bg) 2px 5px
+  );
+}
+
+.viz__plot {
+  position: relative;
+}
+
+/* Axis labels wear text tokens, never a series colour. */
+.viz-axis {
+  font: 700 11.5px/1 var(--font);
+  fill: var(--ink-faint);
+}
+
+/* Equal-width digits only where numbers line up vertically. */
+.viz-axis--num {
+  font-variant-numeric: tabular-nums;
+}
+
+.viz-value {
+  font: 800 12.5px/1 var(--font);
+  fill: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.viz-glyph {
+  font: 800 14px/1 var(--font);
+}
+
+.viz__plot [tabindex='0']:focus-visible {
+  outline: 2.5px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.viz-tip {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  max-width: 190px;
+  padding: 8px 11px;
+  border-radius: 12px;
+  background: var(--ink);
+  color: #fff;
+  font: 600 12.5px/1.4 var(--font);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+
+.viz-tip__head {
+  font-weight: 800;
+  margin-bottom: 2px;
+}
+
+.viz__tablewrap {
+  overflow-x: auto;
+  margin: 0 -4px;
+}
+
+.viz__table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 600 13.5px/1.4 var(--font);
+}
+
+.viz__table th,
+.viz__table td {
+  text-align: left;
+  padding: 7px 10px 7px 0;
+  border-bottom: 1px solid var(--card-border);
+  white-space: nowrap;
+}
+
+.viz__table th {
+  font-weight: 800;
+  color: var(--ink-soft);
+  font-size: 12.5px;
+}
+
+.viz__table td {
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Stat tiles: where the number is the chart --------------------------- */
+
+.stat-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.stat-tile {
+  padding: 14px 15px;
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-md);
+}
+
+.stat-tile__value {
+  /* Proportional figures: tabular-nums makes 121 look loose at this size. */
+  font: 900 27px/1.1 var(--font);
+}
+
+.stat-tile__label {
+  font: 700 13px/1.3 var(--font);
+  color: var(--ink-soft);
+  margin-top: 4px;
+}
+
+.stat-tile__hint {
+  font: 600 12px/1.35 var(--font);
+  color: var(--ink-faint);
+  margin-top: 3px;
+}
+
+/* --- The 0–10 severity picker -------------------------------------------- */
+
+.severity {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.severity__dot {
+  width: 100%;
+  max-width: 44px;
+  min-width: 36px;
+  flex: 1;
+  min-height: 46px;
+  border-radius: 12px;
+  background: var(--sand);
+  color: var(--ink-soft);
+  font: 800 15px/1 var(--font);
+  border: 2px solid transparent;
+}
+
+.severity__dot--on {
+  background: var(--ink);
+  color: #fff;
+}
+
+.severity__dot:focus-visible {
+  border-color: var(--ink);
+  outline: none;
+}
+
+/* --- A row of word buttons ------------------------------------------------ */
+
+/*
+ * Offering the words rather than a text box.
+ *
+ * Typing "diarrhoea" on a phone keyboard is the thing that stops a side effect
+ * being reported at all, so the common ones are buttons and free text is the
+ * last option rather than the first.
+ */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip {
+  min-height: 46px;
+  padding: 0 15px;
+  border-radius: 23px;
+  border: 1.5px solid rgba(0, 0, 0, 0.12);
+  background: var(--card);
+  font: 700 15px/1.3 var(--font);
+  color: var(--ink);
+}
+
+.chip--on {
+  border-color: var(--green);
+  border-width: 2px;
+  background: var(--green-bg);
+  color: var(--green-dark);
+}
+
+.chip:focus-visible {
+  outline: 3px solid var(--green);
+  outline-offset: 2px;
+}
+
+/* A checkbox with a target big enough to hit. */
+.check {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  font: 600 16px/1.4 var(--font);
+  cursor: pointer;
+}
+
+.check input {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  accent-color: var(--green);
+}
+
+/* --- A segmented control, above everything it scopes --------------------- */
+
+/*
+ * Four sections rather than four tabs.
+ *
+ * It sits above the charts rather than inside a card, because a filter inside
+ * one chart's card reads as scoping that chart alone — and switching section
+ * must never re-render a chart into a different shape.
+ */
+.segments {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  margin: 16px 0 18px;
+  background: var(--canvas);
+  border-radius: 14px;
+  overflow-x: auto;
+}
+
+.segment {
+  flex: 1;
+  min-width: 84px;
+  min-height: 44px;
+  padding: 0 10px;
+  border-radius: 10px;
+  font: 800 14.5px/1 var(--font);
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.segment--on {
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.09);
+}
+
+.segment:focus-visible {
+  outline: 3px solid var(--green);
+  outline-offset: 1px;
+}
+
+/* ========================================================================== */
+/* The shareable page                                                         */
+/* ========================================================================== */
+
+/*
+ * A document, not a screen.
+ *
+ * Denser type and real tables, because the reader is a clinician with ninety
+ * seconds rather than the patient this app is otherwise built for. The print
+ * rules at the bottom are the sharing mechanism: the browser's own
+ * "Print → Save as PDF" turns this into a file, with no upload and nothing
+ * leaving the phone unless the patient sends it.
+ */
+.sheet__chrome {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.sheet__page {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-md);
+  padding: 22px 20px 26px;
+}
+
+.sheet__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 14px;
+  margin-bottom: 4px;
+  border-bottom: 2px solid var(--ink);
+}
+
+.sheet__title {
+  font: 900 24px/1.15 var(--font);
+  margin: 0;
+}
+
+.sheet__sub {
+  font: 600 14px/1.4 var(--font);
+  color: var(--ink-soft);
+  margin-top: 4px;
+}
+
+.sheet__stamp {
+  font: 700 11.5px/1.45 var(--font);
+  color: var(--ink-faint);
+  text-align: right;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex: none;
+}
+
+.sheet__section {
+  margin-top: 20px;
+  break-inside: avoid;
+}
+
+.sheet__h2 {
+  font: 800 12.5px/1 var(--font);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+  margin: 0 0 9px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.sheet__list {
+  margin: 0;
+  padding-left: 18px;
+  font: 600 14.5px/1.55 var(--font);
+}
+
+.sheet__none {
+  margin: 0;
+  font: 600 14.5px/1.5 var(--font);
+  color: var(--ink-faint);
+}
+
+.sheet__table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 600 14px/1.45 var(--font);
+}
+
+.sheet__table th {
+  text-align: left;
+  font: 800 11.5px/1 var(--font);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-faint);
+  padding: 0 10px 6px 0;
+}
+
+.sheet__table td {
+  vertical-align: top;
+  padding: 7px 10px 7px 0;
+  border-top: 1px solid var(--card-border);
+}
+
+.sheet__fine {
+  font: 600 12.5px/1.4 var(--font);
+  color: var(--ink-faint);
+}
+
+.sheet__tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: var(--sand);
+  color: var(--ink-soft);
+  font: 700 11px/1.5 var(--font);
+  text-transform: lowercase;
+  white-space: nowrap;
+}
+
+.sheet__foot {
+  margin-top: 26px;
+  padding-top: 12px;
+  border-top: 1px solid var(--card-border);
+  font: 600 12px/1.5 var(--font);
+  color: var(--ink-faint);
+}
+
+/*
+ * Printing.
+ *
+ * Everything that is app rather than document goes: the tab bar, the sidebar,
+ * the scrim, the buttons. The page keeps its own borders because a printed
+ * table without rules is unreadable.
+ */
+@media print {
+  .tabbar,
+  .sidebar,
+  .overlay-close,
+  .sheet__chrome,
+  .back,
+  .banner {
+    display: none !important;
+  }
+
+  body,
+  .app,
+  .main,
+  .overlay,
+  .overlay-root,
+  .overlay-frame {
+    background: #fff !important;
+    position: static !important;
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
+
+  .scroll {
+    overflow: visible !important;
+    height: auto !important;
+  }
+
+  .sheet__page {
+    border: none;
+    padding: 0;
+  }
+
+  .sheet__table,
+  .sheet__list {
+    font-size: 10.5pt;
+  }
 }

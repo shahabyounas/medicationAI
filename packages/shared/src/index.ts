@@ -10,6 +10,13 @@ export * from './schemas/dose.js';
 export * from './schemas/agentEvent.js';
 export * from './schemas/escalation.js';
 export * from './schemas/pushSubscription.js';
+export * from './schemas/reading.js';
+export * from './schemas/sideEffect.js';
+export * from './schemas/symptom.js';
+export * from './schemas/appointment.js';
+export * from './schemas/labResult.js';
+export * from './schemas/immunisation.js';
+export * from './schemas/healthDocument.js';
 
 export * from './agent/graph.js';
 export * from './agent/time.js';

@@ -1,12 +1,19 @@
 # Medication Agent
 
-An agent that turns a prescription into a **finished course**.
+An agent that turns a prescription into a **finished course**, and keeps the
+health record that makes finishing it mean something.
 
 Not a reminder app. An alarm fires at a fixed time and gives up; this holds a
 goal — *all 21 doses taken* — and keeps choosing actions until the goal is met
 or a human takes over. It plans the schedule from the prescription, picks the
 channel, decides when to escalate, adapts to when the patient actually takes
 things, replans after a miss, and brings in family only as a last resort.
+
+It also holds the other half of the picture: what the patient measured, how they
+said they felt, what a medicine did to them, what the tests said, and everything
+they take that no doctor prescribed. Without that the record can say twenty-one
+tablets went in and call the illness resolved, having never asked anybody whether
+they got better.
 
 Built from the [Claude Design project](https://claude.ai/design/p/fc547bbe-c3f9-4a58-9e13-b349f10f3b27),
 plus a doctors-and-visits medical record. Installable as a PWA; responsive from
@@ -27,9 +34,11 @@ npm run dev          # API on :4100, web on :5173
 Then open <http://localhost:5173> (use `localhost`, not `127.0.0.1` — Vite
 binds IPv6).
 
-**Start here:** the app has no data until you add some. Press **+ Add a
-prescription** on any screen, or run `npm run seed` for the design's worked
-scenario (Tom, day 4 of a 7-day course).
+**Start here:** the app has no data until you add some. Press **+ Prescription**
+on the Medicines screen, or run `npm run seed` for the worked scenario — Tom, day
+4 of a 7-day course, with four months of blood pressure readings, a vitamin he
+takes himself, a reported side effect, a follow-up booked, and a penicillin
+allergy on his record.
 
 > **Why 27018?** A MongoDB already running on your machine binds
 > `127.0.0.1:27017` *specifically*, which beats Docker's `0.0.0.0` binding. The
@@ -209,7 +218,7 @@ contract break surfaces at the boundary with the field named rather than as
 
 | Model | What it is |
 | --- | --- |
-| `Patient` | Mealtimes (the planner's anchors), timezone, one family contact |
+| `Patient` | Mealtimes (the planner's anchors), timezone, allergies, one family contact |
 | `Doctor` | A doctor actually seen — reused across conditions, not a string on a prescription |
 | `Visit` | One appointment: reason, diagnosis, notes, vitals, follow-up |
 | `Condition` | The thing being treated; groups medicines and detects recurrence |
@@ -218,9 +227,21 @@ contract break surfaces at the boundary with the field named rather than as
 | `Dose` | One tablet-taking event. 21 of these are "3× a day for 7 days" |
 | `EscalationState` | The agent's cursor in the graph, one per chased dose |
 | `AgentEvent` | Everything the agent did, so nothing it does is invisible |
+| `Reading` | A number the patient measured about themselves |
+| `SymptomEntry` | How ill they said they felt, one answer a day |
+| `SideEffectReport` | A medicine making them worse — filed against the medicine, not the course |
+| `Appointment` | One that has not happened yet, and the reminders sent for it |
+| `LabResult` | A test result, transcribed as printed |
+| `Immunisation` | A jab, and when the next is due |
+| `HealthDocument` | A photograph of the paper |
 
 `Prescription` and `Course` are separate on purpose: the doctor's instruction
 stays a faithful copy of the paper while the plan around it is rearranged.
+
+The second half of that table is the **outcome** side of the record. The first
+half says what a doctor wrote and what the patient swallowed; on its own that
+cannot answer whether any of it worked — the app used to declare an illness
+resolved because the tablets ran out, having never asked anybody how they were.
 
 ### The planner
 
@@ -243,6 +264,190 @@ screen just quietly shows the wrong tablets. It is pinned to real instants in
 two zones in `viewService.test.ts`.
 
 ---
+
+### 4. The two reasons people stop
+
+The agent's one intervention for a patient who stops a course is the day 3–4
+nudge, and it is built for the patient who stopped because the symptom went
+away. That is only one of the two reasons. The other is that the medicine is
+making them ill — and the right response to that is the opposite one.
+
+So **"It's not agreeing with me"** is a flow in its own right, on every medicine
+and on the dose screen. Reporting one does three things, each a promise the copy
+then makes out loud:
+
+1. **Files the report against the medicine**, not the course, so it survives the
+   course ending and shows up the next time that medicine is prescribed.
+2. **Stops the chasing** when the report warrants it — anything past mild, or
+   anything the patient has acted on by stopping already. That means settling
+   every open ladder *and* marking the course `pausedAt`, because the loop
+   activates any dose whose time has come and opens a fresh ladder for it: a
+   paused course without the marker would be told "I've stopped reminding you"
+   and then reminded four hours later. (`sideEffectService.test.ts` pins exactly
+   that.)
+3. **Puts the prescriber's phone number on screen**, because the next move
+   belongs to a person.
+
+What it never does is decide. It does not stop the course — stopping a course of
+antibiotics halfway is itself a clinical act, which is why this app exists — and
+it does not say whether the symptom is serious. It pauses the *reminders*, and
+the doses stay on the record as owed, so nothing is lost if the doctor says
+carry on. A skipped dose can now carry a reason too; `stopped_early` with
+nothing attached is what made "I felt better" and "it was making me ill"
+indistinguishable.
+
+### 5. The medicines nobody prescribed
+
+Most of what people take is not on a prescription: the vitamin D every morning,
+the ibuprofen in the drawer, the cod liver oil a daughter swears by. An app that
+only knows about prescribed medicine has an incomplete list of what is going
+into the patient — incomplete at exactly the moment the list is wanted, when
+somebody in a clinic asks what they are on.
+
+**+ Something I take** sits beside **+ Prescription** with equal weight. Three
+things make it deliberately not an intake:
+
+- **No prescription is created.** `Course.prescriptionId` became nullable for
+  this. Fabricating a prescription for a supplement would put an invented
+  document in the one part of the record meant to be a faithful copy of paper.
+- **No read-back, and no "do you have it yet?".** That question exists because
+  the gap between the surgery and the chemist desynchronises a schedule.
+  Somebody adding the tub already in their cupboard has no gap.
+- **Reminders are off by default**, and `Course.remindersOn` records it. Without
+  that field the open-ended top-up loop adopts a no-reminder supplement, plans a
+  fortnight of doses, and escalates them to the patient's son — which it did,
+  until `selfCareService.test.ts` caught it.
+
+One more trap, also caught by a test: doses are planned from **today**, never
+from `startedAt`. Somebody recording honestly that they have taken vitamin D
+since June is telling the record when they started, not asking for four months
+of doses — every one of which the activation pass would write off as missed,
+wrecking every adherence figure and tripping the rule that texts their family.
+
+### 6. Allergies, checked before the first dose
+
+`Patient.allergies` is checked by name whenever a medicine is added, and the
+flag appears on the read-back — the last screen before the clock starts.
+
+It is a substring match and the copy says so: *"Your record says you have had a
+severe reaction to Penicillin (rash). This prescription is for Penicillin V 250mg.
+I cannot tell whether those are related — please check it with Dr. Iqbal before
+you start."* It states a fact and hands the question to a human. It does not
+block the prescription, and there is a test asserting that it does **not** flag
+amoxicillin for a penicillin allergy — because it genuinely cannot know that,
+and the feature must not be mistaken for a safety net.
+
+### 7. Appointments the agent actually reminds you about
+
+`Visit.followUpDate` was collected at intake from the first version and used for
+one thing: a line of grey text. An agent that will chase a single tablet through
+five channels over four hours was told "come back in three weeks" and did
+nothing at all.
+
+`Appointment` is its own record, and the tick sends three fixed rungs — a week
+before, the day before, the morning of. Not the dose ladder, because the two are
+not the same shape: a dose is chased *because it is late* and stops when
+confirmed, while an appointment is announced *before* it and has nothing to
+escalate to. There is no point ringing somebody's son because the surgery is on
+Tuesday. Rungs are recorded before the push is attempted, so a failing push
+service cannot turn one reminder into one per tick for a week; and a rung whose
+moment has passed is skipped rather than fired late, because a "tomorrow"
+reminder arriving on the day tells the patient the wrong thing.
+
+Follow-up dates already on visits are **offered**, not booked: "come back in
+three weeks" on a note is frequently an instruction to ring the surgery rather
+than an appointment that exists.
+
+### 8. The charts
+
+A new **Health** tab, and the first analytics surface in the app. Everything on
+it was already in the database and none of it was on a screen: the planned and
+actual time of every dose, the anchor each hangs off, the drift the agent taught
+itself, which rung settled each chase. A patient could see a progress bar.
+
+| Chart | What it answers |
+| --- | --- |
+| Adherence by mealtime | *Which dose is the one I miss?* — and it sits next to the mealtimes editor, the control that fixes it |
+| Dose grid | Every tablet of a course, days down and doses across |
+| Burn-down | The plan against what happened, and how many tablets are still owed |
+| How you felt vs doses taken | The product's own thesis, about this patient |
+| Punctuality | When a dose was due against how late it was taken — and `learnedDriftMinutes`, finally visible |
+| Month by month | Adherence over the whole record |
+| Illness timeline | Every illness end to end, with an arrow from an abandoned course to the recurrence |
+| Which nudge worked | How often each rung of the ladder was the one that went out |
+| Readings | Blood pressure, weight, blood sugar and the rest, against the range on the monitor's own leaflet |
+
+Three rules run through all of it:
+
+- **Patterns, not scores.** "You are 81% adherent" is a mark out of ten for
+  being ill. "Your supper dose is missed three times as often as the other two,
+  and your supper is set to 20:00" is something to go and change.
+- **Honest denominators.** Nothing is counted against a dose whose time has not
+  come. Mid-course, "8 of 21" reads as failure when thirteen were never due.
+- **Colour is never the only channel.** Green against red is precisely the pair
+  a red-green colourblind reader cannot separate, and it is the most important
+  distinction in the app — so every grid cell carries a glyph, every legend
+  names its states in words, and every chart has a **Numbers** view holding the
+  same information with no colour at all. "Taken" and "taken late" share one
+  colour on purpose: a separate amber sat 9.5 ΔE from the red of a miss, below
+  the threshold at which anybody can tell two marks apart, so lateness is a
+  notch on the corner and has a chart of its own.
+
+There is one axis, always. Severity runs 0–10 and doses run 0–3; they share a
+day axis as two stacked plots rather than two y-scales on one, because a second
+scale invents a correlation that is not in the data.
+
+### 9. One page to hand a clinician
+
+The record was good and completely trapped. A clinician has ninety seconds and
+is not going to tap through three screens of somebody else's phone, so every
+appointment began with the patient reciting from memory the exact facts the app
+was holding.
+
+**Show this to a doctor** is that record on one printable page, in the order it
+is actually asked in: allergies, then what they are taking now, then what they
+are being treated for, then the numbers. Self-managed medicines are in the same
+list as prescribed ones, marked but not separated — "what are you taking?" has
+one answer, and a supplements section at the bottom is a section that gets
+missed. A print stylesheet drops the app's chrome so the browser's own
+*Print → Save as PDF* produces a file; nothing is uploaded and nothing leaves
+the phone unless the patient sends it.
+
+The provenance note at the foot is not boilerplate. Somebody reading an
+adherence figure at a desk needs to know it is what an app observed rather than
+what was swallowed, and that no clinician has reviewed a word of it.
+
+### 10. Readings, results, jabs and photographs
+
+- **Readings** are the only series the patient owns outright, and the only thing
+  a chronic condition has to show for itself — `isChronic` existed from the
+  start with nothing behind it, because a long-term condition has no course to
+  finish and no tablet to count. The nurse's measurements are the *same* series:
+  blood pressure used to live on the visit as the string `"138/82"`, which
+  cannot be a point on a chart, so it is now two numbers.
+- **Results** are transcription, never interpretation. The flag beside a line is
+  the H or the L the lab printed, copied across — never computed by comparing
+  the value against the range, because deciding a number is abnormal is the one
+  thing this app must not do. A test done twice becomes a line.
+- **Immunisations** carry a next-due date, which makes them the one record that
+  can also be reminded about.
+- **Photographs** of the prescription or the letter, downscaled in the browser
+  to fit under a 1.5MB cap, stored in Mongo and projected out of every list so a
+  record screen does not get slower the more it holds.
+
+### 11. The things that had nowhere to live
+
+- **A refill.** `needsRefillWarning` and `unitsRemaining` existed from the
+  start and nothing ever put units *back*, so the warning fired once and could
+  never be cleared — the patient was told they were running out every time they
+  took a tablet, having already been to the chemist. **I collected more** asks
+  for a count, because the only reliable way to know how many tablets are in a
+  house is for somebody to look in the packet.
+- **A profile.** There was no profile screen at all, which stranded two things.
+  The allergy list is new and must be editable by definition. The family contact
+  was not: it has been the ladder's last rung since the first version, and no
+  screen could add, change or remove the person who gets the phone call. It was
+  seed data or nothing.
 
 ## Guardrails
 
@@ -271,11 +476,19 @@ information survives without the movement.
 | --- | --- |
 | `npm run dev` | API and web together |
 | `npm run seed` | Reset to the design's scenario (day 4 of 7) |
-| `npm test` | 124 tests — 70 pure, 54 integration against real MongoDB |
+| `npm test` | 191 tests — 70 pure, 109 integration against real MongoDB, 12 rendering |
 | `npm run typecheck` | All three packages |
 | `npm run verify` | typecheck → test → build |
 | `npm run vapid` | Generate a VAPID keypair for push |
 | `npm run mongo:up` / `mongo:down` | The database container |
+
+The rendering tests run the screens in `react-dom/server` against **captured API
+responses**, parsed through the same Zod schemas the client parses them with — so
+a fixture that has drifted from the contract fails there rather than passing a
+test and breaking the app. What they catch is the class of failure a typechecker
+cannot: a chart dividing by a zero-length array, a `toFixed` on a null, a day
+holding fewer doses than the widest day. Several assert only that no chart
+renders the string `NaN`, which is the shape that bug always takes.
 
 The integration tests run against a real MongoDB (`medication_ai_test`), not a
 mock. The loop is *defined* by what it does to persisted state across ticks, and
@@ -309,6 +522,31 @@ about the behaviour that matters.
 
 Doctors, visits and conditions have full CRUD under `/api/doctors`,
 `/api/visits`, `/api/conditions`.
+
+The outcome side of the record — reads hang off the patient, because every one
+of them is "this patient's X"; writes are their own resources:
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/patients/:id/insights` | Everything the charts screen draws, in one payload |
+| `GET /api/patients/:id/readings` | Every metric's series, including the empty ones |
+| `GET /api/patients/:id/appointments` | Upcoming, past, and the follow-up dates never acted on |
+| `GET /api/patients/:id/side-effects` | Open, settled, and one row per medicine ever reported against |
+| `GET /api/patients/:id/results` | Test results, trends, jabs and documents |
+| `GET /api/patients/:id/share` | The one-page summary for a clinician |
+| `GET /api/patients/:id/profile` → `PATCH` | Details, allergies and the family contact |
+| `POST /api/side-effects` | "This medicine is making me worse" |
+| `PATCH /api/side-effects/:id` | It settled down, or the doctor has been told |
+| `POST /api/courses/:id/resume` | "My doctor said to carry on" |
+| `POST /api/courses/:id/refill \| /stop` | Units back on the shelf; end a course with a reason |
+| `POST /api/self-care` | Something the patient takes that nobody prescribed |
+| `POST /api/self-care/:id/stop` | They have stopped taking it — not a course abandoned |
+| `POST /api/readings` / `DELETE /api/readings/:id` | A measurement |
+| `POST /api/symptoms` | How ill they feel today, 0–10 |
+| `POST /api/appointments` → `PATCH` / `DELETE` | Book one, mark it attended or missed |
+| `POST /api/visits/:id/appointment` | Turn a visit's follow-up date into a reminded appointment |
+| `POST /api/lab-results` / `/api/immunisations` | Transcribe a result, record a jab |
+| `POST /api/documents` → `GET /api/documents/:id` | A photograph of the paper |
 
 ---
 
@@ -422,6 +660,24 @@ Honest list, so nobody assumes otherwise:
   retention policy, subscription storage, and — by injecting push events into a
   real browser — the notification the service worker builds and its buttons.
   The encrypted HTTP leg itself is `web-push`'s.
+- **No carer access.** The app still takes `patients[0]`, and the family contact
+  is notify-only: the son can be texted but cannot see or do anything. For the
+  patient this is built for, the carer is often the primary user — this is the
+  largest remaining gap.
+- **No photo-to-form.** A prescription can be *photographed* and kept beside the
+  record, but the four typed steps are still the only way to get its contents
+  in. The camera step that would fill the form remains the obvious adoption fix.
+- **The allergy check is a name match.** It will not know that amoxicillin is a
+  penicillin, the copy says so, and there is a test asserting it does not
+  pretend otherwise. It catches the obvious case; it is not a safety net.
+- **Documents live in Mongo as base64**, capped at 1.5MB with the browser
+  downscaling to fit. There is no object store, and adding one would mean a
+  second set of credentials and a second thing to pay for in exchange for
+  photographs of single sheets of A4.
+- **No dark mode for the charts.** The app's design system is light-only; the
+  chart palette is validated against its white and sand surfaces, and a dark set
+  would need its own steps validated against a dark surface rather than an
+  automatic flip.
 - **No "Ask the agent" chat.** The design's fourth tab is a chat with canned
   replies. A chat that isn't backed by a model would either be a fake or would
   breach the guardrail above, so the tab is the medical record instead.

@@ -165,6 +165,7 @@ describe('storing subscriptions', () => {
       phone: '+447700900999',
       timezone: 'Europe/London',
       mealtimes: scenario.patient.mealtimes,
+      allergies: [],
       familyContacts: [],
     });
 

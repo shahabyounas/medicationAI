@@ -1,6 +1,9 @@
 import {
   MINUTE_MS,
   MISSED_AFTER_MINUTES,
+  appointmentReminderMessage,
+  dueAppointmentReminder,
+  formatClockTime,
   escalationMessage,
   familyAlertMessage,
   getNode,
@@ -22,6 +25,7 @@ import {
   replanCourse,
 } from '../services/doseService.js';
 import { deliveryChannel } from './channels.js';
+import { sendToPatient } from '../services/pushService.js';
 import {
   advanceEscalation,
   dueEscalations,
@@ -61,6 +65,8 @@ export async function tick(now: Date = new Date()): Promise<TickResult> {
 
   await topUpOpenEndedCourses(now);
   const activated = await activateDueDoses(now);
+  const appointmentEvents = await remindAboutAppointments(now);
+  events.push(...appointmentEvents);
   const states = await dueEscalations(now);
 
   let actionsTaken = 0;
@@ -74,10 +80,131 @@ export async function tick(now: Date = new Date()): Promise<TickResult> {
   return {
     ranAt: now,
     statesExamined: states.length + activated,
-    actionsTaken,
+    actionsTaken: actionsTaken + appointmentEvents.length,
     dosesMarkedMissed,
     events,
   };
+}
+
+/**
+ * Remind about appointments, and write off the ones that have gone past.
+ *
+ * `Visit.followUpDate` was collected at intake from the first version and used
+ * for a line of grey text — so an agent that will chase one tablet through five
+ * channels was told "come back in three weeks" and did nothing at all. A
+ * follow-up nobody attends is how a course of treatment ends halfway.
+ *
+ * Not the escalation ladder, because the two are not the same shape: a dose is
+ * chased *because it is late* and stops the moment it is confirmed, while an
+ * appointment is announced *before* it, cannot be confirmed early, and has
+ * nothing to escalate to. There is no point ringing somebody's son because the
+ * surgery is on Tuesday.
+ *
+ * The rung is recorded before the push is attempted, so a failing push service
+ * cannot turn one reminder into one per tick for the rest of the week.
+ */
+async function remindAboutAppointments(now: Date): Promise<AgentEvent[]> {
+  const events: AgentEvent[] = [];
+
+  const scheduled = await collections.appointments.find(
+    { status: 'scheduled' },
+    { sort: { scheduledFor: 1 }, limit: 200 },
+  );
+
+  for (const appointment of scheduled) {
+    // An appointment whose day has passed with nothing recorded against it.
+    // Marked rather than deleted: a missed follow-up is a fact about the
+    // record, and it is the one the recurrence story turns on.
+    if (appointment.scheduledFor.getTime() < now.getTime() - 24 * 60 * 60 * 1000) {
+      await collections.appointments.updateById(appointment._id, { status: 'missed' });
+      events.push(
+        await logAgentEvent({
+          patientId: appointment.patientId,
+          type: 'appointment_missed',
+          occurredAt: now,
+          doseId: null,
+          courseId: null,
+          conditionId: appointment.conditionId,
+          channel: 'internal',
+          summary: `The appointment with ${appointment.withWhom} has gone past with nothing recorded`,
+          message: null,
+          escalationNodeId: null,
+          visibleToFamily: true,
+        }),
+      );
+      continue;
+    }
+
+    const rung = dueAppointmentReminder(appointment, now);
+    if (!rung) continue;
+
+    const patient = await collections.patients.findById(appointment.patientId);
+    if (!patient) continue;
+
+    await collections.appointments.updateById(appointment._id, {
+      remindersSent: [...appointment.remindersSent, rung],
+    });
+
+    const message = appointmentReminderMessage({
+      rung,
+      withWhom: appointment.withWhom,
+      clockTime: formatClockTime(appointment.scheduledFor, patient.timezone),
+      location: appointment.location,
+    });
+
+    events.push(
+      await logAgentEvent({
+        patientId: appointment.patientId,
+        type: 'appointment_reminder',
+        occurredAt: now,
+        doseId: null,
+        courseId: null,
+        conditionId: appointment.conditionId,
+        channel: 'push',
+        summary: message,
+        message,
+        escalationNodeId: null,
+        visibleToFamily: true,
+      }),
+    );
+
+    await sendAppointmentPush(appointment.patientId, appointment._id, message);
+  }
+
+  return events;
+}
+
+/**
+ * The notification itself.
+ *
+ * Failure is swallowed deliberately, as it is for a dose reminder: the event is
+ * already on the record, the appointments screen shows it either way, and a
+ * push outage must not stop the rest of the tick.
+ */
+async function sendAppointmentPush(
+  patientId: string,
+  appointmentId: string,
+  message: string,
+): Promise<void> {
+  try {
+    await sendToPatient(patientId, {
+      title: 'Appointment coming up',
+      body: message,
+      // Tagged per appointment, so the day-before reminder replaces the
+      // week-before one rather than stacking up a wall of them.
+      tag: `appointment-${appointmentId}`,
+      patientId,
+      doseId: null,
+      escalationNodeId: null,
+      // No "I took it" / "Not yet": there is nothing to confirm about a date.
+      actionable: false,
+      url: '/#health',
+      // An appointment next Tuesday has no business vibrating a phone.
+      urgent: false,
+    });
+  } catch {
+    // Already logged as an agent event; nothing here is worth failing a tick.
+  }
 }
 
 /** How far ahead an open-ended course keeps doses planned. */
@@ -96,7 +223,13 @@ const OPEN_ENDED_TOP_UP_THRESHOLD = 7;
  * error, just a patient who quietly stops taking their diabetes tablets.
  */
 async function topUpOpenEndedCourses(now: Date): Promise<number> {
-  const openEnded = await collections.courses.find({ status: 'active', totalDoses: null });
+  // `remindersOn: false` is a supplement the patient asked not to be nudged
+  // about. Topping it up would hand the escalation ladder a dose to chase.
+  const openEnded = await collections.courses.find({
+    status: 'active',
+    totalDoses: null,
+    remindersOn: { $ne: false },
+  });
   let added = 0;
 
   for (const course of openEnded) {
@@ -144,6 +277,7 @@ async function topUpOpenEndedCourses(now: Date): Promise<number> {
         takenAt: null,
         amount: course.amountPerDose,
         confirmedVia: null,
+        skipReason: null,
         rescheduledReason: null,
       })),
     );
@@ -167,6 +301,24 @@ async function activateDueDoses(now: Date): Promise<number> {
 
   const staleBefore = now.getTime() - MISSED_AFTER_MINUTES * MINUTE_MS;
 
+  /**
+   * Courses whose chasing a reported side effect has paused.
+   *
+   * Settling the open ladders when the report came in is not enough on its own:
+   * this function activates any dose whose time has arrived and opens a *fresh*
+   * ladder for it, so without this check the app would tell a patient "I've
+   * stopped reminding you about it" and then remind them about it four hours
+   * later. The dose still becomes `due` — it is genuinely owed, and the record
+   * should say so — it is only the chasing that stops.
+   */
+  const paused = new Set(
+    (
+      await collections.courses.find({
+        $or: [{ pausedAt: { $ne: null } }, { remindersOn: false }],
+      })
+    ).map((course) => course._id),
+  );
+
   for (const dose of due) {
     // A dose whose whole escalation window has already elapsed — the server was
     // down, or the schedule was seeded in the past. Reminding someone about
@@ -177,6 +329,9 @@ async function activateDueDoses(now: Date): Promise<number> {
     }
 
     await collections.doses.updateById(dose._id, { status: 'due' });
+
+    if (paused.has(dose.courseId)) continue;
+
     await openEscalation({
       patientId: dose.patientId,
       doseId: dose._id,
@@ -212,6 +367,12 @@ async function runNode(state: EscalationState, now: Date): Promise<NodeOutcome> 
   const course = await collections.courses.findById(dose.courseId);
   const patient = await collections.patients.findById(dose.patientId);
   if (!course || !patient) return NO_ACTION;
+
+  // A side effect reported while the ladder was already running.
+  if (course.pausedAt !== null) {
+    await settleEscalation(state.doseId, 'resolved', now);
+    return NO_ACTION;
+  }
 
   // A run of misses is stronger evidence than a slow afternoon, so it can pull
   // the family rung forward — but only ever forward, never past it.
@@ -359,7 +520,9 @@ async function buildMessageContext(
   const condition = dose.conditionId
     ? await collections.conditions.findById(dose.conditionId)
     : null;
-  const prescription = await collections.prescriptions.findById(course.prescriptionId);
+  const prescription = course.prescriptionId
+    ? await collections.prescriptions.findById(course.prescriptionId)
+    : null;
   const doctor = prescription ? await collections.doctors.findById(prescription.doctorId) : null;
 
   const takenCount = await collections.doses.count({

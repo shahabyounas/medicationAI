@@ -13,6 +13,23 @@ import type {
   VisitDetail,
   VisitsResponse,
 } from '@medication-ai/shared';
+import type {
+  AppointmentsResponse,
+  CreateAppointmentRequest,
+  CreateImmunisationRequest,
+  CreateLabResultRequest,
+  InsightsResponse,
+  ProfileResponse,
+  ReadingMetric,
+  ReadingsResponse,
+  RecordReadingRequest,
+  ReportSideEffectRequest,
+  ReportSideEffectResponse,
+  ResultsResponse,
+  SelfCareIntakeRequest,
+  ShareSummaryResponse,
+  UpdateProfileRequest,
+} from '@medication-ai/shared';
 import { ApiError, api } from './api/client.js';
 import { useAgentClock } from './agentClock.js';
 import { AgentMark, ErrorState, Loading } from './components/common.js';
@@ -30,6 +47,19 @@ import {
   TakenOverlay,
   VisitOverlay,
 } from './screens/overlays.js';
+import { HealthScreen } from './screens/HealthScreen.js';
+import { ProfileScreen } from './screens/ProfileScreen.js';
+import { ShareScreen } from './screens/ShareScreen.js';
+import { SideEffectReplyScreen, SideEffectScreen } from './screens/SideEffectScreen.js';
+import {
+  AppointmentOverlay,
+  DocumentOverlay,
+  ImmunisationOverlay,
+  LabResultOverlay,
+  ReadingOverlay,
+  RefillOverlay,
+  SelfCareOverlay,
+} from './screens/LogOverlays.js';
 
 /**
  * Three tabs, with the lifetime record as home.
@@ -43,8 +73,15 @@ import {
  * illness from 2019 belong to one chronology, so the present is the top of the
  * record rather than a screen beside it. "Medicines" still answers the separate
  * question *what am I on right now?*, and "Reminders" holds the settings.
+ *
+ * "Health" is the fourth, and it earns the slot because it answers a question
+ * none of the others can: *how am I actually doing?* Everything on it — the
+ * patterns in the doses, the readings the patient takes themselves, what the
+ * tests said, when they are next seen — is the outcome side of the record, and
+ * the app held almost none of it. The record says what was prescribed and what
+ * was swallowed; this says whether any of it worked.
  */
-type Tab = 'record' | 'medicines' | 'reminders';
+type Tab = 'record' | 'medicines' | 'health' | 'reminders';
 
 type Overlay =
   | { kind: 'none' }
@@ -55,7 +92,25 @@ type Overlay =
   | { kind: 'intake'; options: IntakeOptionsResponse }
   | { kind: 'readback'; detail: PrescriptionDetail }
   | { kind: 'record'; data: VisitsResponse }
-  | { kind: 'condition'; data: ConditionHistory };
+  | { kind: 'condition'; data: ConditionHistory }
+  | { kind: 'sideEffect'; courseId: string | null }
+  | { kind: 'sideEffectReply'; reply: ReportSideEffectResponse }
+  | { kind: 'reading'; metric: ReadingMetric }
+  | { kind: 'selfCare'; options: IntakeOptionsResponse }
+  | { kind: 'appointment'; options: IntakeOptionsResponse }
+  | { kind: 'labResult'; options: IntakeOptionsResponse }
+  | { kind: 'immunisation' }
+  | { kind: 'document' }
+  | {
+      kind: 'refill';
+      courseId: string;
+      medicationName: string;
+      dosesRemaining: number;
+      unitsRemaining: number | null;
+    }
+  | { kind: 'share'; summary: ShareSummaryResponse }
+  | { kind: 'profile'; profile: ProfileResponse }
+  | { kind: 'photo'; title: string; dataUrl: string };
 
 /**
  * What a step is called, for a screen reader announcing the dialog, and what to
@@ -90,6 +145,36 @@ function describeOverlay(overlay: Overlay): { label: string; confirmClose: strin
       // No question: the prescription is already saved, and closing means the
       // same as "not yet", which now leaves it waiting on the Today screen.
       return { label: 'Check the prescription', confirmClose: null };
+    case 'sideEffect':
+      return {
+        label: 'Tell me what is wrong',
+        confirmClose: 'Stop telling me about this? Nothing will be written down.',
+      };
+    case 'sideEffectReply':
+      return { label: 'What I have done about it', confirmClose: null };
+    case 'reading':
+      return { label: 'Write down a reading', confirmClose: null };
+    case 'selfCare':
+      return {
+        label: 'Add something you take yourself',
+        confirmClose: 'Leave this? Nothing will be added.',
+      };
+    case 'appointment':
+      return { label: 'Add an appointment', confirmClose: null };
+    case 'labResult':
+      return { label: 'Add a test result', confirmClose: 'Leave this? Nothing will be saved.' };
+    case 'immunisation':
+      return { label: 'Add a jab', confirmClose: null };
+    case 'document':
+      return { label: 'Add a photograph', confirmClose: null };
+    case 'refill':
+      return { label: 'How many have you got?', confirmClose: null };
+    case 'share':
+      return { label: 'Your record, on one page', confirmClose: null };
+    case 'profile':
+      return { label: 'You', confirmClose: null };
+    case 'photo':
+      return { label: overlay.title, confirmClose: null };
     case 'none':
       return { label: '', confirmClose: null };
   }
@@ -112,6 +197,10 @@ interface Data {
   medicines: MedicinesResponse;
   visits: VisitsResponse;
   family: FamilyResponse;
+  insights: InsightsResponse;
+  readings: ReadingsResponse;
+  appointments: AppointmentsResponse;
+  results: ResultsResponse;
 }
 
 /**
@@ -140,6 +229,16 @@ const TABS: { id: Tab; icon: ReactNode; label: string }[] = [
       <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         <rect x="2.5" y="9" width="19" height="7.5" rx="3.75" />
         <path d="M12 9v7.5" />
+      </svg>
+    ),
+  },
+  {
+    id: 'health',
+    label: 'Health',
+    icon: (
+      <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M3 17.5l4.5-5 3.5 3L17 8l4 4.5" />
+        <path d="M3 21h18" />
       </svg>
     ),
   },
@@ -193,13 +292,27 @@ export function App(): ReactNode {
    * The whole payload is small and this keeps the screens from disagreeing.
    */
   const refresh = useCallback(async (id: string) => {
-    const [history, medicines, visits, family] = await Promise.all([
-      api.history(id),
-      api.medicines(id),
-      api.visits(id),
-      api.family(id),
-    ]);
-    setData({ history, medicines, visits, family });
+    const [history, medicines, visits, family, insights, readings, appointments, results] =
+      await Promise.all([
+        api.history(id),
+        api.medicines(id),
+        api.visits(id),
+        api.family(id),
+        api.insights(id),
+        api.readings(id),
+        api.appointments(id),
+        api.results(id),
+      ]);
+    setData({
+      history,
+      medicines,
+      visits,
+      family,
+      insights,
+      readings,
+      appointments,
+      results,
+    });
   }, []);
 
   const load = useCallback(async () => {
@@ -426,6 +539,112 @@ export function App(): ReactNode {
     [busy, patientId, refresh],
   );
 
+  /* ======================================================================== */
+  /* The outcome side of the record                                           */
+  /* ======================================================================== */
+
+  /**
+   * Report a side effect.
+   *
+   * The reply is its own screen rather than a banner, because it is the only
+   * place in the app where the next move belongs to a person and the patient
+   * needs a phone number in front of them rather than a line of text to
+   * remember.
+   */
+  const reportSideEffect = useCallback(
+    async (request: ReportSideEffectRequest) => {
+      if (!patientId || busy) return;
+      setBusy(true);
+      setError(null);
+      try {
+        const reply = await api.reportSideEffect(request);
+        await refresh(patientId);
+        setOverlay({ kind: 'sideEffectReply', reply });
+      } catch (cause) {
+        setError(cause instanceof ApiError ? cause.message : 'Could not save that.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, patientId, refresh],
+  );
+
+  /** Run something that changes the record, then resync every screen. */
+  const run = useCallback(
+    async (action: () => Promise<string | void>, closeOverlayAfter = true) => {
+      if (!patientId || busy) return;
+      setBusy(true);
+      setError(null);
+      try {
+        const message = await action();
+        await refresh(patientId);
+        if (closeOverlayAfter) setOverlay({ kind: 'none' });
+        if (typeof message === 'string') setNotice(message);
+      } catch (cause) {
+        setError(cause instanceof ApiError ? cause.message : 'Could not save that.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, patientId, refresh],
+  );
+
+  /** Open a form that needs the existing doctors, conditions and medicines. */
+  const openWithOptions = useCallback(
+    async (kind: 'selfCare' | 'appointment' | 'labResult') => {
+      if (!patientId) return;
+      setBusy(true);
+      setError(null);
+      try {
+        setOverlay({ kind, options: await api.intakeOptions(patientId) });
+      } catch (cause) {
+        setError(cause instanceof ApiError ? cause.message : 'Could not open the form.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [patientId],
+  );
+
+  const openShare = useCallback(async () => {
+    if (!patientId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setOverlay({ kind: 'share', summary: await api.shareSummary(patientId) });
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : 'Could not build the page.');
+    } finally {
+      setBusy(false);
+    }
+  }, [patientId]);
+
+  const openProfile = useCallback(async () => {
+    if (!patientId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setOverlay({ kind: 'profile', profile: await api.profile(patientId) });
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : 'Could not open your details.');
+    } finally {
+      setBusy(false);
+    }
+  }, [patientId]);
+
+  const openDocument = useCallback(async (documentId: string) => {
+    try {
+      const result = await api.document(documentId);
+      setOverlay({
+        kind: 'photo',
+        title: result.document.title,
+        dataUrl: result.dataUrl,
+      });
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : 'Could not open that.');
+    }
+  }, []);
+
   const closeOverlay = useCallback(() => setOverlay({ kind: 'none' }), []);
   const step = describeOverlay(overlay);
 
@@ -535,10 +754,62 @@ export function App(): ReactNode {
               {tab === 'medicines' && (
                 <MedicinesScreen
                   medicines={data.medicines}
+                  busy={busy}
                   onOpenCondition={(id) => void openCondition(id)}
                   onAddPrescription={() => void openIntake()}
                   onOpenRecord={openRecord}
                   recordSummary={summariseRecord(data.visits)}
+                  onAddSelfCare={() => void openWithOptions('selfCare')}
+                  onReportSideEffect={(courseId) => setOverlay({ kind: 'sideEffect', courseId })}
+                  onRefill={(course) => setOverlay({ kind: 'refill', ...course })}
+                  onResume={(courseId) =>
+                    void run(async () => (await api.resumeChasing(courseId)).message, false)
+                  }
+                  onStopSelfCare={(courseId) =>
+                    void run(async () => (await api.stopSelfCare(courseId)).message, false)
+                  }
+                />
+              )}
+              {tab === 'health' && patientId && (
+                <HealthScreen
+                  insights={data.insights}
+                  readings={data.readings}
+                  appointments={data.appointments}
+                  results={data.results}
+                  busy={busy}
+                  onLogReading={(metric) => setOverlay({ kind: 'reading', metric })}
+                  onRecordSymptom={(conditionId, severity) =>
+                    void run(
+                      async () =>
+                        (
+                          await api.recordSymptom({
+                            patientId,
+                            conditionId,
+                            recordedAt: new Date(),
+                            severity,
+                          })
+                        ).message,
+                      false,
+                    )
+                  }
+                  onAddAppointment={() => void openWithOptions('appointment')}
+                  onBookFromVisit={(visitId) =>
+                    void run(async () => {
+                      await api.appointmentFromVisit(visitId);
+                      return "Booked. I'll remind you a week before, the day before, and on the morning.";
+                    }, false)
+                  }
+                  onSetAppointmentStatus={(appointmentId, status) =>
+                    void run(async () => {
+                      await api.setAppointmentStatus(appointmentId, status);
+                    }, false)
+                  }
+                  onAddResult={() => void openWithOptions('labResult')}
+                  onAddImmunisation={() => setOverlay({ kind: 'immunisation' })}
+                  onOpenDocument={(documentId) => void openDocument(documentId)}
+                  onAddDocument={() => setOverlay({ kind: 'document' })}
+                  onOpenCondition={(id) => void openCondition(id)}
+                  onShare={() => void openShare()}
                 />
               )}
               {tab === 'reminders' && patientId && (
@@ -549,6 +820,9 @@ export function App(): ReactNode {
                   onSaveMealtimes={(mealtimes) => void saveMealtimes(mealtimes)}
                   onOpenReport={() => void openReport()}
                   reportAvailable={data.medicines.active.length + data.medicines.finished.length > 0}
+                  onOpenProfile={() => void openProfile()}
+                  onShare={() => void openShare()}
+                  allergyCount={data.insights.openSideEffects.length}
                 />
               )}
             </div>
@@ -637,6 +911,163 @@ export function App(): ReactNode {
                 onStart={() => void startCourse(overlay.detail._id)}
                 onNotYet={waitForMedicine}
               />
+            )}
+
+            {/* --- The outcome side of the record ----------------------- */}
+
+            {overlay.kind === 'sideEffect' && patientId && data && (
+              <SideEffectScreen
+                medicines={data.medicines}
+                preselectedCourseId={overlay.courseId}
+                patientId={patientId}
+                busy={busy}
+                onSubmit={(request) => void reportSideEffect(request)}
+                onCancel={closeOverlay}
+              />
+            )}
+            {overlay.kind === 'sideEffectReply' && (
+              <SideEffectReplyScreen reply={overlay.reply} onClose={closeOverlay} />
+            )}
+            {overlay.kind === 'reading' && patientId && (
+              <ReadingOverlay
+                metric={overlay.metric}
+                patientId={patientId}
+                busy={busy}
+                onSubmit={(request: RecordReadingRequest) =>
+                  void run(async () => (await api.recordReading(request)).message)
+                }
+                onCancel={closeOverlay}
+              />
+            )}
+            {overlay.kind === 'selfCare' && patientId && (
+              <SelfCareOverlay
+                options={overlay.options}
+                patientId={patientId}
+                busy={busy}
+                onSubmit={(request: SelfCareIntakeRequest) =>
+                  void run(async () => {
+                    const result = await api.addSelfCare(request);
+                    // The allergy flags come first: they are the reason the
+                    // check exists, and a success message that buried them
+                    // would be worse than no check at all.
+                    return result.allergyFlags.length > 0
+                      ? result.allergyFlags.join(' ')
+                      : result.message;
+                  })
+                }
+                onCancel={closeOverlay}
+              />
+            )}
+            {overlay.kind === 'appointment' && patientId && (
+              <AppointmentOverlay
+                options={overlay.options}
+                patientId={patientId}
+                busy={busy}
+                onSubmit={(request: CreateAppointmentRequest) =>
+                  void run(async () => {
+                    await api.createAppointment(request);
+                    return "Saved. I'll remind you a week before, the day before, and on the morning.";
+                  })
+                }
+                onCancel={closeOverlay}
+              />
+            )}
+            {overlay.kind === 'labResult' && patientId && (
+              <LabResultOverlay
+                options={overlay.options}
+                patientId={patientId}
+                busy={busy}
+                onSubmit={(request: CreateLabResultRequest) =>
+                  void run(async () => {
+                    await api.recordLabResult(request);
+                    return 'Result kept. If the same test comes round again I will draw the line.';
+                  })
+                }
+                onCancel={closeOverlay}
+              />
+            )}
+            {overlay.kind === 'immunisation' && patientId && (
+              <ImmunisationOverlay
+                patientId={patientId}
+                busy={busy}
+                onSubmit={(request: CreateImmunisationRequest) =>
+                  void run(async () => {
+                    await api.recordImmunisation(request);
+                    return 'Written down.';
+                  })
+                }
+                onCancel={closeOverlay}
+              />
+            )}
+            {overlay.kind === 'document' && patientId && (
+              <DocumentOverlay
+                patientId={patientId}
+                busy={busy}
+                onSubmit={(request) =>
+                  void run(async () => {
+                    await api.uploadDocument(request);
+                    return 'Kept with your record.';
+                  })
+                }
+                onCancel={closeOverlay}
+              />
+            )}
+            {overlay.kind === 'refill' && (
+              <RefillOverlay
+                medicationName={overlay.medicationName}
+                dosesRemaining={overlay.dosesRemaining}
+                unitsRemaining={overlay.unitsRemaining}
+                busy={busy}
+                onSubmit={(unitsNow) =>
+                  void run(async () => (await api.recordRefill(overlay.courseId, unitsNow)).message)
+                }
+                onCancel={closeOverlay}
+              />
+            )}
+            {overlay.kind === 'share' && (
+              <ShareScreen summary={overlay.summary} onClose={closeOverlay} />
+            )}
+            {overlay.kind === 'profile' && patientId && (
+              <ProfileScreen
+                profile={overlay.profile}
+                busy={busy}
+                onSave={(request: UpdateProfileRequest) =>
+                  void run(async () => {
+                    const result = await api.updateProfile(patientId, request);
+                    return result.movedDoses === 0
+                      ? 'Saved.'
+                      : `Saved. I moved the ${result.movedDoses} ${
+                          result.movedDoses === 1 ? 'dose' : 'doses'
+                        } still to come to match.`;
+                  })
+                }
+                onClose={closeOverlay}
+              />
+            )}
+            {overlay.kind === 'photo' && (
+              <div className="overlay overlay--light">
+                <button className="back" onClick={closeOverlay}>
+                  ← Back
+                </button>
+                <div className="scroll" style={{ flex: 1 }}>
+                  <h1 className="h1">{overlay.title}</h1>
+                  {overlay.dataUrl.startsWith('data:application/pdf') ? (
+                    <a className="btn btn--primary" href={overlay.dataUrl} download={overlay.title}>
+                      Open the PDF
+                    </a>
+                  ) : (
+                    <img
+                      src={overlay.dataUrl}
+                      alt={overlay.title}
+                      style={{
+                        width: '100%',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid var(--card-border)',
+                      }}
+                    />
+                  )}
+                </div>
+              </div>
             )}
           </OverlayRoot>
         )}
