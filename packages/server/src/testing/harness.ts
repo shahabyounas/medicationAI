@@ -46,14 +46,18 @@ export interface TestScenario {
 
 /** A patient, a doctor, a medicine and a condition — enough to prescribe. */
 export async function createScenario(
-  overrides: { notifyAfterConsecutiveMisses?: number; withFamily?: boolean } = {},
+  overrides: {
+    notifyAfterConsecutiveMisses?: number;
+    withFamily?: boolean;
+    timezone?: string;
+  } = {},
 ): Promise<TestScenario> {
   const withFamily = overrides.withFamily ?? true;
 
   const patient = await collections.patients.insert({
     name: 'Nasreen Ahmed',
     phone: '+447700900123',
-    timezone: 'Europe/London',
+    timezone: overrides.timezone ?? 'Europe/London',
     mealtimes: DEFAULT_MEALTIMES,
     familyContacts: withFamily
       ? [

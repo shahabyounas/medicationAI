@@ -1,4 +1,5 @@
 import {
+  AgentTickResponseSchema,
   CourseReportSchema,
   IntakeOptionsResponseSchema,
   IntakeResponseSchema,
@@ -10,6 +11,7 @@ import {
   PatientSchema,
   TodayResponseSchema,
   VisitsResponseSchema,
+  type AgentTickResponse,
   type CourseReport,
   type IntakeOptionsResponse,
   type IntakeRequest,
@@ -17,6 +19,7 @@ import {
   type PrescriptionDetail,
   type DoseActionResponse,
   type FamilyResponse,
+  type Mealtimes,
   type MedicinesResponse,
   type Patient,
   type TodayResponse,
@@ -165,15 +168,28 @@ export const api = {
       { method: 'POST', body: JSON.stringify({}) },
     ),
 
-  /** Advance the agent by one step — the demo control. */
-  tick: (now?: Date) =>
+  /**
+   * Correct the mealtimes the whole schedule hangs off.
+   *
+   * The reply says how many doses moved, because this silently rewrites a
+   * running course and the patient is owed a straight answer about it.
+   */
+  updateMealtimes: (patientId: string, mealtimes: Mealtimes) =>
     request(
-      '/agent/tick',
-      z.object({
-        actionsTaken: z.number(),
-        dosesMarkedMissed: z.number(),
-        events: z.array(z.object({ summary: z.string() })),
-      }),
-      { method: 'POST', body: JSON.stringify(now ? { now: now.toISOString() } : {}) },
+      `/patients/${patientId}`,
+      PatientSchema.extend({ movedDoses: z.number() }),
+      { method: 'PATCH', body: JSON.stringify({ mealtimes }) },
     ),
+
+  /**
+   * Advance the agent by one step.
+   *
+   * Deployed there is no timer and no cron, so this is what actually moves the
+   * agent: see `agentClock.ts`. `now` is for driving a schedule by hand.
+   */
+  tick: (now?: Date): Promise<AgentTickResponse> =>
+    request('/agent/tick', AgentTickResponseSchema, {
+      method: 'POST',
+      body: JSON.stringify(now ? { now: now.toISOString() } : {}),
+    }),
 };

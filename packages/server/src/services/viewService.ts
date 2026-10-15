@@ -1,14 +1,15 @@
 import {
   COURSE_STATUS_LABELS,
   DOSE_STATUS_LABELS,
-  MEDICATION_FORM_LABELS,
   buildCourseProgress,
   calendarDaysBetween,
+  describeUnits,
   escalationMessage,
   feelBetterMessage,
   formatClockTime,
   shouldShowFeelBetterNudge,
   summariseAdherence,
+  timeOnDay,
   type Condition,
   type ConditionSummary,
   type Course,
@@ -25,6 +26,7 @@ import {
 } from '@medication-ai/shared';
 import { collections } from '../db/collections.js';
 import { eventsSince, familyVisibleEvents } from './agentEventService.js';
+import { describeItem, totalUnitsFor } from './prescriptionService.js';
 
 /**
  * Read models for the screens.
@@ -72,15 +74,22 @@ function greetingFor(instant: Date, timeZone: string): string {
   return 'Good evening';
 }
 
-function startOfDayIn(instant: Date, timeZone: string): Date {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(instant);
-  // en-CA formats as YYYY-MM-DD, which parses back as a UTC midnight.
-  return new Date(`${parts}T00:00:00.000Z`);
+/**
+ * The window the Today screen covers: midnight to midnight where the patient is.
+ *
+ * It has to be the patient's midnight, not UTC midnight on the patient's date.
+ * Those are the same instant only in UTC itself; in New York the UTC one lands
+ * at 8pm the evening before, which slid the whole window five hours early and
+ * dropped the evening dose off the home screen entirely. `timeOnDay` resolves a
+ * wall-clock time in a zone and is the tested path for exactly this — it also
+ * means the day is 23 or 25 hours long across a clock change rather than
+ * always 24.
+ */
+function dayWindowIn(instant: Date, timeZone: string): { start: Date; end: Date } {
+  return {
+    start: timeOnDay(instant, 0, '00:00', timeZone),
+    end: timeOnDay(instant, 1, '00:00', timeZone),
+  };
 }
 
 export async function buildToday(patientId: string, now = new Date()): Promise<TodayResponse> {
@@ -90,8 +99,7 @@ export async function buildToday(patientId: string, now = new Date()): Promise<T
   const activeCourses = await collections.courses.find({ patientId, status: 'active' });
   const courseIds = activeCourses.map((c) => c._id);
 
-  const dayStart = startOfDayIn(now, tz);
-  const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+  const { start: dayStart, end: dayEnd } = dayWindowIn(now, tz);
 
   const todaysDoses = courseIds.length
     ? await collections.doses.find(
@@ -140,7 +148,70 @@ export async function buildToday(patientId: string, now = new Date()): Promise<T
     feelBetterNudge: nudge,
     activity: await eventsSince(patientId, dayStart),
     courseGroups,
+    waiting: await buildWaiting(patientId, now, tz),
   };
+}
+
+/**
+ * The prescriptions the agent is holding until the medicine is in the house.
+ *
+ * `confirmed` means the patient checked the read-back and the plan is ready to
+ * run. Nothing else in the app reads that status, so the "not yet" answer used
+ * to be a one-way door: the prescription stayed confirmed forever and no screen
+ * could start it. Surfacing it here is what makes that answer reversible.
+ */
+async function buildWaiting(
+  patientId: string,
+  now: Date,
+  timeZone: string,
+): Promise<TodayResponse['waiting']> {
+  const prescriptions = await collections.prescriptions.find(
+    { patientId, status: 'confirmed' },
+    { sort: { issuedAt: -1 } },
+  );
+  if (prescriptions.length === 0) return [];
+
+  return Promise.all(
+    prescriptions.map(async (prescription) => {
+      const doctor = await collections.doctors.findById(prescription.doctorId);
+      const condition = prescription.conditionId
+        ? await collections.conditions.findById(prescription.conditionId)
+        : null;
+      const medications = await collections.medications.find({
+        _id: { $in: prescription.items.map((item) => item.medicationId) },
+      });
+      const formById = new Map(medications.map((m) => [m._id, m.form]));
+
+      return {
+        _id: prescription._id,
+        doctorName: doctor?.name ?? 'your doctor',
+        conditionName: condition?.name ?? null,
+        medicationNames: prescription.items.map((item) => item.medicationName),
+        lines: prescription.items.map((item) => {
+          const form = formById.get(item.medicationId) ?? 'tablet';
+          const total = totalUnitsFor(item);
+          const instruction = describeItem(item, form);
+          return total === null
+            ? `${item.medicationName} — ${instruction}`
+            : `${item.medicationName} — ${instruction} (${describeUnits(total, form)} in all)`;
+        }),
+        addedLabel: addedLabelFor(prescription.createdAt, now, timeZone),
+      };
+    }),
+  );
+}
+
+/** "Added today" / "Added yesterday" / "Added on 12 October". */
+function addedLabelFor(added: Date, now: Date, timeZone: string): string {
+  const days = calendarDaysBetween(added, now, timeZone);
+  if (days <= 0) return 'Added today';
+  if (days === 1) return 'Added yesterday';
+  if (days < 7) return `Added ${days} days ago`;
+  return `Added on ${new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    day: 'numeric',
+    month: 'long',
+  }).format(added)}`;
 }
 
 /**
@@ -189,6 +260,7 @@ async function buildFeelBetterNudge(
 
   const prescription = await collections.prescriptions.findById(course.prescriptionId);
   const doctor = prescription ? await collections.doctors.findById(prescription.doctorId) : null;
+  const medication = await collections.medications.findById(course.medicationId);
 
   return {
     title: "Feeling better? That's the medicine working.",
@@ -196,7 +268,7 @@ async function buildFeelBetterNudge(
       patientName: patient.name,
       medicationName: course.medicationName,
       amount: course.amountPerDose,
-      unitLabel: 'tablet',
+      form: medication?.form ?? 'tablet',
       scheduledAt: now,
       timeZone: patient.timezone,
       doseNumber: group.takenCount + 1,
@@ -233,7 +305,7 @@ async function buildCourseGroups(
 
   const groups: TodayCourseGroup[] = [];
 
-  for (const [key, siblings] of byKey) {
+  for (const siblings of byKey.values()) {
     const first = siblings[0];
     if (!first) continue;
 
@@ -283,7 +355,6 @@ async function buildCourseGroups(
           ? []
           : buildDayCells(doses, startedAt, dayNumber, durationDays, patient.timezone),
     });
-    void key;
   }
 
   // The course closest to finishing goes first; open-ended ones sink to the
@@ -402,9 +473,8 @@ export async function buildMedicines(patientId: string, now = new Date()): Promi
   };
 }
 
-function instructionLineFor(course: Course, form: keyof typeof MEDICATION_FORM_LABELS): string {
-  const unit = MEDICATION_FORM_LABELS[form];
-  const amount = `${course.amountPerDose} ${course.amountPerDose === 1 ? unit : `${unit}s`}`;
+function instructionLineFor(course: Course, form: MedicationForm): string {
+  const amount = describeUnits(course.amountPerDose, form);
   const times =
     course.frequency.timesPerDay === 1
       ? 'once a day'
@@ -446,6 +516,7 @@ export async function buildFamily(patientId: string): Promise<FamilyResponse> {
       { channel: 'family', label: 'Family, only as a last resort', order: 3 },
     ],
     recentEscalations: await familyVisibleEvents(patientId, 15),
+    mealtimes: patient.mealtimes,
   };
 }
 

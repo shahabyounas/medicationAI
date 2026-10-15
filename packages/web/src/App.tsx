@@ -3,6 +3,7 @@ import type {
   CourseReport,
   DoseView,
   FamilyResponse,
+  Mealtimes,
   IntakeOptionsResponse,
   IntakeRequest,
   MedicinesResponse,
@@ -12,11 +13,13 @@ import type {
   VisitsResponse,
 } from '@medication-ai/shared';
 import { ApiError, api } from './api/client.js';
-import { AgentMark, ErrorState, Loading, StatusBar } from './components/common.js';
+import { useAgentClock } from './agentClock.js';
+import { AgentMark, ErrorState, Loading } from './components/common.js';
+import { OverlayRoot } from './components/OverlayRoot.js';
 import { TodayScreen } from './screens/TodayScreen.js';
 import { MedicinesScreen } from './screens/MedicinesScreen.js';
-import { VisitsScreen } from './screens/VisitsScreen.js';
-import { FamilyScreen } from './screens/FamilyScreen.js';
+import { RecordScreen } from './screens/RecordScreen.js';
+import { RemindersScreen } from './screens/RemindersScreen.js';
 import { IntakeScreen } from './screens/IntakeScreen.js';
 import {
   DoseOverlay,
@@ -26,7 +29,16 @@ import {
   VisitOverlay,
 } from './screens/overlays.js';
 
-type Tab = 'today' | 'medicines' | 'visits' | 'family';
+/**
+ * Three tabs, not four.
+ *
+ * "Medicines" and "Record" both answered *what am I on?*, and course progress
+ * was drawn three different ways across them — a percentage bar on one screen,
+ * day cells and counts on another, a third version in the report. The record is
+ * now a row at the bottom of Medicines, and "Family" has become "Reminders",
+ * which is the question that screen was really answering.
+ */
+type Tab = 'today' | 'medicines' | 'reminders';
 
 type Overlay =
   | { kind: 'none' }
@@ -35,7 +47,56 @@ type Overlay =
   | { kind: 'visit'; visit: VisitDetail }
   | { kind: 'report'; report: CourseReport }
   | { kind: 'intake'; options: IntakeOptionsResponse }
-  | { kind: 'readback'; detail: PrescriptionDetail };
+  | { kind: 'readback'; detail: PrescriptionDetail }
+  | { kind: 'record'; data: VisitsResponse };
+
+/**
+ * What a step is called, for a screen reader announcing the dialog, and what to
+ * ask before closing it.
+ *
+ * Every step can now be closed. Making the read-back and the intake form
+ * undismissable kept a stray Escape from throwing away an answer or a half-typed
+ * form, but it also left a dialog with no visible exit and a dead Escape key —
+ * which reads as a jammed app, not as a considered choice. So the two steps that
+ * stand to lose something ask first, and the rest close silently.
+ */
+function describeOverlay(overlay: Overlay): { label: string; confirmClose: string | null } {
+  switch (overlay.kind) {
+    case 'dose':
+      return { label: `Take your ${overlay.dose.medicationName}`, confirmClose: null };
+    case 'taken':
+      return { label: 'Dose confirmed', confirmClose: null };
+    case 'visit':
+      return { label: `Your visit with ${overlay.visit.doctorName}`, confirmClose: null };
+    case 'report':
+      return { label: `Course report — ${overlay.report.conditionName}`, confirmClose: null };
+    case 'record':
+      return { label: 'Your record', confirmClose: null };
+    case 'intake':
+      return {
+        label: 'Add a prescription',
+        confirmClose: 'Leave this form? Everything you have typed will be lost.',
+      };
+    case 'readback':
+      // No question: the prescription is already saved, and closing means the
+      // same as "not yet", which now leaves it waiting on the Today screen.
+      return { label: 'Check the prescription', confirmClose: null };
+    case 'none':
+      return { label: '', confirmClose: null };
+  }
+}
+
+/** "5 visits · 2 doctors" — enough to show the record is worth opening. */
+function summariseRecord(visits: VisitsResponse): string {
+  if (visits.visits.length === 0 && visits.doctors.length === 0) {
+    return 'Nothing filed yet';
+  }
+  const parts = [
+    `${visits.visits.length} ${visits.visits.length === 1 ? 'visit' : 'visits'}`,
+    `${visits.doctors.length} ${visits.doctors.length === 1 ? 'doctor' : 'doctors'}`,
+  ];
+  return parts.join(' · ');
+}
 
 interface Data {
   today: TodayResponse;
@@ -44,18 +105,65 @@ interface Data {
   family: FamilyResponse;
 }
 
-const TABS: { id: Tab; icon: string; label: string }[] = [
-  { id: 'today', icon: '◉', label: 'Today' },
-  { id: 'medicines', icon: '▤', label: 'Medicines' },
-  { id: 'visits', icon: '✚', label: 'Record' },
-  { id: 'family', icon: '♡', label: 'Family' },
+/**
+ * Line icons rather than the `◉ ▤ ✚ ♡` glyphs that were here before.
+ *
+ * Those were ornaments: a filled circle for "Today" and a heart for "Family"
+ * carry no meaning to a patient in her seventies, and at 21px the typeface drew
+ * them at four different weights. A clock, a capsule and a bell say what the
+ * three tabs are without the label having to do all the work.
+ */
+const TABS: { id: Tab; icon: ReactNode; label: string }[] = [
+  {
+    id: 'today',
+    label: 'Today',
+    icon: (
+      <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 7.5V12l3 2" />
+      </svg>
+    ),
+  },
+  {
+    id: 'medicines',
+    label: 'Medicines',
+    icon: (
+      <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <rect x="2.5" y="9" width="19" height="7.5" rx="3.75" />
+        <path d="M12 9v7.5" />
+      </svg>
+    ),
+  },
+  {
+    id: 'reminders',
+    label: 'Reminders',
+    icon: (
+      <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M18 9.5a6 6 0 1 0-12 0c0 5-2 6-2 6h16s-2-1-2-6Z" />
+        <path d="M10.2 19a2 2 0 0 0 3.6 0" />
+      </svg>
+    ),
+  },
 ];
 
 const TAB_IDS = TABS.map((tab) => tab.id);
 
+/**
+ * Two tabs went away; their URLs did not.
+ *
+ * The tab lives in the hash, so a bookmark or an installed PWA shortcut can
+ * still point at `#visits` or `#family`. Those land on the screen that absorbed
+ * them rather than silently falling back to Today.
+ */
+const RETIRED_TABS: Record<string, Tab> = {
+  visits: 'medicines',
+  family: 'reminders',
+};
+
 function tabFromHash(): Tab {
-  const candidate = window.location.hash.replace('#', '') as Tab;
-  return TAB_IDS.includes(candidate) ? candidate : 'today';
+  const candidate = window.location.hash.replace('#', '');
+  if (TAB_IDS.includes(candidate as Tab)) return candidate as Tab;
+  return RETIRED_TABS[candidate] ?? 'today';
 }
 
 export function App(): ReactNode {
@@ -129,6 +237,26 @@ export function App(): ReactNode {
     if (!data) return false;
     return data.today.doses.some((dose) => dose.status === 'due' || dose.status === 'missed');
   }, [data]);
+
+  /**
+   * Let the agent catch up while the app is open.
+   *
+   * Nothing else advances it in production — a serverless function has no
+   * timer — so the open app is the clock. It also means a dose that comes due
+   * while the screen is sitting there turns red on its own, rather than waiting
+   * for someone to pull to refresh an app that answers "have I taken it yet?".
+   *
+   * Paused mid-action and behind a step: the data under an open dialog should
+   * not change while it is being read, and the action itself resyncs anyway.
+   */
+  useAgentClock({
+    enabled: patientId !== null && !busy && overlay.kind === 'none',
+    onAdvance: () => {
+      if (!patientId) return;
+      // A failed resync earns no banner; the next tick is a minute away.
+      void refresh(patientId).catch(() => undefined);
+    },
+  });
 
   /** Run a dose action, then resync every screen. */
   const act = useCallback(
@@ -228,7 +356,67 @@ export function App(): ReactNode {
     [busy, patientId, refresh, goToTab],
   );
 
+  /** The record, opened from Medicines rather than owning a tab. */
+  const openRecord = useCallback(() => {
+    if (!data) return;
+    setOverlay({ kind: 'record', data: data.visits });
+  }, [data]);
+
+  /**
+   * Correct the mealtimes, and move the doses still to come with them.
+   *
+   * The notice says how many moved. A setting that quietly rewrites a running
+   * course should not report "Saved".
+   */
+  const saveMealtimes = useCallback(
+    async (mealtimes: Mealtimes) => {
+      if (!patientId || busy) return;
+      setBusy(true);
+      setError(null);
+      try {
+        const result = await api.updateMealtimes(patientId, mealtimes);
+        await refresh(patientId);
+        setNotice(
+          result.movedDoses === 0
+            ? 'Mealtimes saved. Nothing left to take was affected.'
+            : `Mealtimes saved. I moved the ${result.movedDoses} ${
+                result.movedDoses === 1 ? 'dose' : 'doses'
+              } still to come to match.`,
+        );
+      } catch (cause) {
+        setError(cause instanceof ApiError ? cause.message : 'Could not save those times.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, patientId, refresh],
+  );
+
   const closeOverlay = useCallback(() => setOverlay({ kind: 'none' }), []);
+  const step = describeOverlay(overlay);
+
+  /**
+   * "Not yet" — and what closing the read-back means.
+   *
+   * The prescription stays saved and now shows on Today as something waiting on
+   * the medicine, so this is a pause rather than a discard.
+   */
+  const waitForMedicine = useCallback(() => {
+    setOverlay({ kind: 'none' });
+    setNotice(
+      "Saved. It's waiting on your Today screen — tell me when you have the medicine and I'll start the reminders.",
+    );
+  }, []);
+
+  /** Closing a step: confirm when something would be lost, then do the right thing. */
+  const requestClose = useCallback(() => {
+    if (step.confirmClose && !window.confirm(step.confirmClose)) return;
+    if (overlay.kind === 'readback') {
+      waitForMedicine();
+      return;
+    }
+    closeOverlay();
+  }, [closeOverlay, overlay.kind, step.confirmClose, waitForMedicine]);
 
   return (
     <div className="app">
@@ -278,8 +466,6 @@ export function App(): ReactNode {
       </aside>
 
       <main className="main">
-        <StatusBar />
-
         {!data && !error && <Loading label="Waking your agent…" />}
         {!data && error && <ErrorState message={error} onRetry={() => void load()} />}
 
@@ -308,6 +494,7 @@ export function App(): ReactNode {
                   onOpenDose={(dose) => setOverlay({ kind: 'dose', dose })}
                   onOpenCondition={(id) => void openReport(id)}
                   onAddPrescription={() => void openIntake()}
+                  onStartCourse={(id) => void startCourse(id)}
                 />
               )}
               {tab === 'medicines' && (
@@ -315,19 +502,16 @@ export function App(): ReactNode {
                   medicines={data.medicines}
                   onOpenCondition={(id) => void openReport(id)}
                   onAddPrescription={() => void openIntake()}
+                  onOpenRecord={openRecord}
+                  recordSummary={summariseRecord(data.visits)}
                 />
               )}
-              {tab === 'visits' && (
-                <VisitsScreen
-                  data={data.visits}
-                  onOpenVisit={(visit) => setOverlay({ kind: 'visit', visit })}
-                  onAddPrescription={() => void openIntake()}
-                />
-              )}
-              {tab === 'family' && patientId && (
-                <FamilyScreen
+              {tab === 'reminders' && patientId && (
+                <RemindersScreen
                   family={data.family}
                   patientId={patientId}
+                  busy={busy}
+                  onSaveMealtimes={(mealtimes) => void saveMealtimes(mealtimes)}
                   onOpenReport={() => void openReport()}
                   reportAvailable={data.today.courseGroups.some((g) => g.conditionId !== null)}
                 />
@@ -361,7 +545,7 @@ export function App(): ReactNode {
         )}
 
         {overlay.kind !== 'none' && (
-          <div className="overlay-root">
+          <OverlayRoot label={step.label} onClose={requestClose}>
             {overlay.kind === 'dose' && (
               <DoseOverlay
                 dose={overlay.dose}
@@ -381,6 +565,13 @@ export function App(): ReactNode {
             {overlay.kind === 'report' && (
               <ReportOverlay report={overlay.report} onClose={closeOverlay} />
             )}
+            {overlay.kind === 'record' && (
+              <RecordScreen
+                data={overlay.data}
+                onOpenVisit={(visit) => setOverlay({ kind: 'visit', visit })}
+                onClose={closeOverlay}
+              />
+            )}
             {overlay.kind === 'intake' && patientId && (
               <IntakeScreen
                 options={overlay.options}
@@ -395,15 +586,10 @@ export function App(): ReactNode {
                 detail={overlay.detail}
                 busy={busy}
                 onStart={() => void startCourse(overlay.detail._id)}
-                onNotYet={() => {
-                  closeOverlay();
-                  setNotice(
-                    "Saved. I'll wait — tell me when you have the medicine and I'll start the reminders.",
-                  );
-                }}
+                onNotYet={waitForMedicine}
               />
             )}
-          </div>
+          </OverlayRoot>
         )}
       </main>
     </div>

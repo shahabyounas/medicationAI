@@ -1,14 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import {
-  MEDICATION_FORM_LABELS,
   applySpacing,
   defaultOffsetFor,
+  describeUnits,
   formatClockTime,
   planDoses,
+  timeOnDay,
   type Course,
   type CreateDose,
   type Dose,
   type Medication,
+  type MedicationForm,
   type Patient,
   type Prescription,
   type PrescriptionDetail,
@@ -38,18 +40,17 @@ export async function buildPrescriptionDetail(
   const startAt = prescription.medicineInHandAt ?? new Date();
 
   const readBack = prescription.items.map((item) => {
-    const medication = medications.get(item.medicationId);
-    const unit = MEDICATION_FORM_LABELS[medication?.form ?? 'tablet'];
+    const form = medications.get(item.medicationId)?.form ?? 'tablet';
     const times = previewTimes(item, patient, startAt);
     const total = totalUnitsFor(item);
 
     return {
       medicationName: item.medicationName,
-      instruction: describeItem(item, unit),
+      instruction: describeItem(item, form),
       plan:
         total === null
           ? `Ongoing — ${times.join(', ')} each day`
-          : `${total} ${total === 1 ? unit : `${unit}s`} — I've set ${formatList(times)}`,
+          : `${describeUnits(total, form)} — I've set ${formatList(times)}`,
     };
   });
 
@@ -64,8 +65,8 @@ export async function buildPrescriptionDetail(
 }
 
 /** "1 tablet · 3 times a day · after food · 7 days" */
-export function describeItem(item: PrescriptionItem, unitLabel: string): string {
-  const parts = [`${item.amountPerDose} ${item.amountPerDose === 1 ? unitLabel : `${unitLabel}s`}`];
+export function describeItem(item: PrescriptionItem, form: MedicationForm): string {
+  const parts = [describeUnits(item.amountPerDose, form)];
 
   parts.push(
     item.frequency.timesPerDay === 1 ? 'once a day' : `${item.frequency.timesPerDay} times a day`,
@@ -96,16 +97,12 @@ function previewTimes(item: PrescriptionItem, patient: Patient, startAt: Date): 
     durationDays: 1,
     mealtimes: patient.mealtimes,
     timeZone: patient.timezone,
-    // Preview the shape of a full day, not a day truncated by the current time.
-    startAt: startOfDayFor(startAt),
+    // Preview the shape of a full day, not a day truncated by the current time —
+    // and the patient's own day, since UTC midnight is the previous evening for
+    // anybody west of Greenwich.
+    startAt: timeOnDay(startAt, 0, '00:00', patient.timezone),
   });
   return planned.map((dose) => formatClockTime(dose.scheduledAt, patient.timezone));
-}
-
-function startOfDayFor(instant: Date): Date {
-  const copy = new Date(instant);
-  copy.setUTCHours(0, 0, 0, 0);
-  return copy;
 }
 
 function formatList(values: string[]): string {
@@ -275,8 +272,7 @@ export async function startPrescription(
   });
 
   for (const course of courses) {
-    const medication = medications.get(course.medicationId);
-    const unit = MEDICATION_FORM_LABELS[medication?.form ?? 'tablet'];
+    const form = medications.get(course.medicationId)?.form ?? 'tablet';
     const count = doses.filter((dose) => dose.courseId === course._id).length;
 
     await logAgentEvent({
@@ -287,7 +283,7 @@ export async function startPrescription(
       courseId: course._id,
       conditionId: course.conditionId,
       channel: 'internal',
-      summary: `Planned ${count} ${count === 1 ? unit : `${unit}s`} of ${course.medicationName} around your mealtimes`,
+      summary: `Planned ${describeUnits(count, form)} of ${course.medicationName} around your mealtimes`,
       message: null,
       escalationNodeId: null,
       visibleToFamily: true,

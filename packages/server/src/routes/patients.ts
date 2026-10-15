@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { collections } from '../db/collections.js';
 import { asyncHandler, parseBody, pathParam } from '../http/errors.js';
 import { buildFamily, buildMedicines, buildToday } from '../services/viewService.js';
+import { reanchorToMealtimes } from '../services/doseService.js';
 import { buildVisitsResponse } from '../services/recordService.js';
 import { VisitsResponseSchema } from '@medication-ai/shared';
 
@@ -51,10 +52,15 @@ patientsRouter.get(
 patientsRouter.patch(
   '/:patientId',
   asyncHandler(async (req, res) => {
+    const patientId = pathParam(req, 'patientId');
     const patch = parseBody(UpdatePatientSchema, req.body);
     const { familyContacts, ...rest } = patch;
 
-    const patient = await collections.patients.updateById(pathParam(req, 'patientId'), {
+    // Read the old mealtimes before the write: re-anchoring the doses still to
+    // come needs both sides to work out each one's offset from its own anchor.
+    const before = await collections.patients.requireById(patientId);
+
+    const patient = await collections.patients.updateById(patientId, {
       ...rest,
       ...(familyContacts
         ? {
@@ -64,7 +70,14 @@ patientsRouter.patch(
           }
         : {}),
     });
-    res.json(PatientSchema.parse(patient));
+
+    // Mealtimes are not a preference that waits for the next prescription: the
+    // running course is scheduled against them, so it moves too.
+    const movedDoses = patch.mealtimes
+      ? await reanchorToMealtimes(patientId, before.mealtimes, patient.mealtimes)
+      : 0;
+
+    res.json({ ...PatientSchema.parse(patient), movedDoses });
   }),
 );
 

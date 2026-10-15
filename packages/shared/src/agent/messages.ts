@@ -1,4 +1,5 @@
 import type { EscalationNodeId } from '../schemas/escalation.js';
+import { describeUnits, type MedicationForm } from '../schemas/medication.js';
 import { formatClockTime } from './time.js';
 
 /**
@@ -16,7 +17,8 @@ export interface MessageContext {
   patientName: string;
   medicationName: string;
   amount: number;
-  unitLabel: string;
+  /** The dosage form, so the copy says "capsule" when that is what it is. */
+  form: MedicationForm;
   scheduledAt: Date;
   timeZone: string;
   doseNumber: number;
@@ -30,8 +32,7 @@ export interface MessageContext {
 }
 
 function doseLine(ctx: MessageContext): string {
-  const unit = ctx.amount === 1 ? ctx.unitLabel : `${ctx.unitLabel}s`;
-  return `${ctx.amount} ${unit} of ${ctx.medicationName}`;
+  return `${describeUnits(ctx.amount, ctx.form)} of ${ctx.medicationName}`;
 }
 
 /** The message for a given rung of the escalation ladder. */
@@ -105,9 +106,13 @@ export function feelBetterMessage(ctx: MessageContext): string {
   return `You feel better because it's working. ${doctor} ${duration}. Stopping now is how the infection comes back.${left} — I'll see you through it.`;
 }
 
-export function refillWarningMessage(unitsRemaining: number, medicationName: string): string {
+export function refillWarningMessage(
+  unitsRemaining: number,
+  medicationName: string,
+  form: MedicationForm,
+): string {
   if (unitsRemaining <= 0) return `You've run out of ${medicationName}. You'll need more to finish.`;
-  return `${unitsRemaining} ${unitsRemaining === 1 ? 'tablet' : 'tablets'} of ${medicationName} left — not enough to finish the course. Time to reorder.`;
+  return `${describeUnits(unitsRemaining, form)} of ${medicationName} left — not enough to finish the course. Time to reorder.`;
 }
 
 export function courseCompletedMessage(ctx: MessageContext): string {

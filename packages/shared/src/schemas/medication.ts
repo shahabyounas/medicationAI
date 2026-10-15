@@ -12,15 +12,32 @@ export const MedicationFormSchema = z.enum([
 ]);
 export type MedicationForm = z.infer<typeof MedicationFormSchema>;
 
-export const MEDICATION_FORM_LABELS: Record<MedicationForm, string> = {
-  tablet: 'tablet',
-  capsule: 'capsule',
-  liquid: 'dose',
-  injection: 'injection',
-  inhaler: 'puff',
-  drops: 'drops',
-  cream: 'application',
+/**
+ * What the patient is actually holding, singular and plural.
+ *
+ * Both forms are written out rather than pluralised with an "s" at the call
+ * site, which is how "2 dropss" happens — and the whole table exists so that a
+ * capsule is never called a tablet in copy the patient reads.
+ */
+export const MEDICATION_FORM_UNITS: Record<MedicationForm, { one: string; many: string }> = {
+  tablet: { one: 'tablet', many: 'tablets' },
+  capsule: { one: 'capsule', many: 'capsules' },
+  liquid: { one: 'dose', many: 'doses' },
+  injection: { one: 'injection', many: 'injections' },
+  inhaler: { one: 'puff', many: 'puffs' },
+  drops: { one: 'drop', many: 'drops' },
+  cream: { one: 'application', many: 'applications' },
 };
+
+export const MEDICATION_FORM_LABELS = Object.fromEntries(
+  Object.entries(MEDICATION_FORM_UNITS).map(([form, unit]) => [form, unit.one]),
+) as Record<MedicationForm, string>;
+
+/** "1 capsule", "2 tablets", "3 drops" — the phrase, counted and in the right form. */
+export function describeUnits(amount: number, form: MedicationForm): string {
+  const unit = MEDICATION_FORM_UNITS[form];
+  return `${amount} ${amount === 1 ? unit.one : unit.many}`;
+}
 
 /**
  * A medicine in the catalogue.

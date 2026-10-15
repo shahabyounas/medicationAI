@@ -115,12 +115,27 @@ curl localhost:4100/api/agent/deliveries   # what it actually sent, and to whom
 
 ## Responsive, and installable
 
-There is no fake phone bezel. The layout is the real thing at both sizes:
+There is no fake phone bezel, and no drawn status bar either — the phone has a
+real one, directly above, and a second frozen clock under it only ever looked
+broken. The layout is the real thing at both sizes:
 
 | Width | Shell |
 | --- | --- |
 | `< 900px` | Full-bleed app, bottom tab bar, full-screen steps, safe-area insets |
 | `>= 900px` | Sidebar navigation, centred reading column, steps as modal dialogs |
+
+The steps are modal in the full sense: Tab stays inside one, focus moves in when
+it opens and back to whatever opened it when it goes. Every step closes three
+ways — a button in the corner, Escape, and a click on the scrim beside it.
+
+Two of them used to close no way at all. The read-back and the intake form were
+deliberately undismissable, on the reasoning that a step existing to be answered
+should not be waved away by a stray keystroke. In the hand that reads as a
+jammed app: no visible exit, and a dead Escape key. The read-back had no back
+button either, so its only exits were its two answers. Now the form asks before
+discarding what you typed, and closing the read-back means the same as "not
+yet" — which is a real state the home screen can get you back out of, rather
+than a prescription dropped on the floor.
 
 It installs as a PWA — web manifest, maskable icons, standalone display, and a
 service worker that precaches the built shell so a cold start works offline.
@@ -128,7 +143,7 @@ service worker that precaches the built shell so a cold start works offline.
 ### Reminders that arrive with the app closed
 
 Web Push, which is the difference between a reminder and a thing you have to
-already be looking at. **Family → Turn on reminders** registers the browser;
+already be looking at. **Reminders → Turn on reminders** registers the browser;
 `POST /api/push/subscribe` stores the endpoint against the patient.
 
 A reminder notification carries **I took it** and **Not yet**. "I took it"
@@ -219,6 +234,14 @@ quietly break schedulers:
   later — the count is what matters clinically, not the end date.
 - **Daylight saving.** "8am" stays 8am across the transition.
 
+Reading the plan back needs the same care. "Today" on the home screen is a
+calendar day where the patient is standing, not UTC's — those are the same
+window only in UTC itself. Taken as UTC midnight on the patient's date, a New
+York day starts at 8pm the evening before, and the 8:30pm dose falls off the end
+of the screen while the previous evening's takes its place. Nothing errors; the
+screen just quietly shows the wrong tablets. It is pinned to real instants in
+two zones in `viewService.test.ts`.
+
 ---
 
 ## Guardrails
@@ -248,7 +271,7 @@ information survives without the movement.
 | --- | --- |
 | `npm run dev` | API and web together |
 | `npm run seed` | Reset to the design's scenario (day 4 of 7) |
-| `npm test` | 112 tests — 70 pure, 42 integration against real MongoDB |
+| `npm test` | 124 tests — 70 pure, 54 integration against real MongoDB |
 | `npm run typecheck` | All three packages |
 | `npm run verify` | typecheck → test → build |
 | `npm run vapid` | Generate a VAPID keypair for push |
@@ -349,8 +372,20 @@ egress IP to allowlist.
 `vercel.json` declares no cron. Vercel **Hobby** allows a daily one at most,
 which is useless to a ladder measured in minutes — a once-a-day rung is not a
 reminder — so rather than ship a schedule that only looks like it works, the
-deployment has none. The agent advances when something calls the tick:
-`POST /api/agent/tick`, which the app's own demo control does.
+deployment has none.
+
+**The open app is the clock instead.**
+[`packages/web/src/agentClock.ts`](packages/web/src/agentClock.ts) posts
+`/api/agent/tick` when the app opens, when it comes back to the foreground, and
+once a minute while it is being looked at. A frozen function has no timer, but a
+request arriving is exactly what wakes one — and the app being open *is* a
+request arriving. Without it the deployment looks finished and does nothing: no
+dose ever turns `due`, no reminder is ever sent, and nothing reports an error.
+
+Ticks are safe to repeat and safe to run from several devices at once, because
+the cursor lives in MongoDB and a tick is a function of persisted state rather
+than of who called it. A failed tick is silent — it is housekeeping the patient
+did not ask for, and the reads behind each screen report their own failures.
 
 `GET /api/agent/tick` is still there, still guarded by `CRON_SECRET`, so turning
 it on later is one block in `vercel.json` and no code change:

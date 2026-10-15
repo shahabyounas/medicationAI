@@ -7,8 +7,12 @@
  */
 :root {
   --ink: #16211c;
-  --ink-soft: #7a837d;
-  --ink-faint: #9ba39d;
+  /* Darkened to clear 4.5:1 on white and on the sand cards. These two carry
+     almost every explanatory line in the app — at the old values (#7a837d,
+     about 4.0:1, and #9ba39d, about 2.9:1) the copy telling a patient in her
+     seventies what to do was the least legible text on the screen. */
+  --ink-soft: #5e6b64;
+  --ink-faint: #76817b;
 
   --canvas: #ede7dd;
   --app-bg: #faf7f1;
@@ -174,6 +178,14 @@ textarea {
   display: none;
 }
 
+/*
+ * The phone's own status bar sits above the app, not inside it.
+ *
+ * A second one used to be drawn at the top of this column — a frozen clock and
+ * three bars of signal, directly under the real ones. It was already hidden on
+ * a desktop as "a lie on a laptop", and it was no more true on a phone. All it
+ * genuinely provided was clearance for the notch, which is this padding.
+ */
 .main {
   flex: 1;
   min-width: 0;
@@ -182,6 +194,7 @@ textarea {
   position: relative;
   min-height: 100vh;
   min-height: 100dvh;
+  padding-top: env(safe-area-inset-top);
 }
 
 .scroll {
@@ -192,19 +205,9 @@ textarea {
 }
 
 .pad {
-  padding: 8px 20px 28px;
+  /* 8px was the gap under a status bar that is no longer drawn. */
+  padding: 20px 20px 28px;
   padding-bottom: calc(28px + env(safe-area-inset-bottom));
-}
-
-.status-bar {
-  height: 44px;
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: env(safe-area-inset-top) 26px 0 26px;
-  font: 800 14px/1 var(--font);
-  color: var(--ink);
 }
 
 /* --- Desktop / tablet ----------------------------------------------------- */
@@ -214,9 +217,8 @@ textarea {
     background: var(--canvas);
   }
 
-  /* A phone status bar is a lie on a laptop. */
-  .status-bar {
-    display: none;
+  .main {
+    padding-top: 0;
   }
 
   .sidebar {
@@ -317,6 +319,9 @@ textarea {
 .tab-icon {
   font: 400 21px/1 var(--font);
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .tab-label {
   font: 800 12px/1 var(--font);
@@ -564,6 +569,22 @@ textarea {
   align-items: center;
   gap: 13px;
 }
+/* A mealtime. Wide enough for a 12-hour clock with an AM/PM control, and tall
+   enough to hit — this is the one field a patient in her seventies will edit. */
+.time-input {
+  flex: none;
+  min-height: 52px;
+  padding: 0 12px;
+  border: 1.5px solid rgba(0, 0, 0, 0.16);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  font: 800 17px/1 var(--font);
+  color: var(--ink);
+}
+.time-input:disabled {
+  opacity: 0.5;
+}
+
 .row-card {
   display: flex;
   align-items: center;
@@ -656,6 +677,38 @@ textarea {
   animation: fade-in 0.18s ease-out both;
 }
 
+/* Holds the step, so the close button can sit in the step's own corner rather
+   than the screen's — they are not the same place once this is a modal. */
+.overlay-frame {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  position: relative;
+}
+
+/* The one guaranteed way out of every step.
+   Escape and a click on the scrim do the same thing; this is the visible
+   version, because a dialog offering only two answers and no exit reads as an
+   app that has jammed. */
+.overlay-close {
+  position: absolute;
+  top: calc(8px + env(safe-area-inset-top));
+  right: 10px;
+  z-index: 2;
+  width: 46px;
+  height: 46px;
+  border-radius: 23px;
+  background: rgba(22, 33, 28, 0.07);
+  color: var(--ink);
+  font: 800 19px/46px var(--font);
+  text-align: center;
+}
+.overlay--dark ~ .overlay-close,
+.overlay--green ~ .overlay-close {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+
 .overlay {
   flex: 1;
   display: flex;
@@ -687,10 +740,12 @@ textarea {
     justify-content: center;
     padding: 40px;
   }
-  .overlay {
+  .overlay-frame {
     flex: none;
     width: min(620px, 100%);
     max-height: 100%;
+  }
+  .overlay {
     border-radius: 28px;
     padding: 32px;
     box-shadow: 0 30px 70px rgba(0, 0, 0, 0.3);

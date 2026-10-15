@@ -2,6 +2,7 @@ import {
   MINUTE_MS,
   ON_TIME_GRACE_MINUTES,
   afterTakeMessage,
+  anchorTime,
   buildCourseProgress,
   countConsecutiveMisses,
   formatClockTime,
@@ -9,9 +10,11 @@ import {
   needsRefillWarning,
   refillWarningMessage,
   rescheduledMessage,
+  timeOnDay,
   type Course,
   type CourseProgress,
   type Dose,
+  type Mealtimes,
 } from '@medication-ai/shared';
 import { collections } from '../db/collections.js';
 import { ConflictError } from '../db/repository.js';
@@ -96,6 +99,7 @@ export async function takeDose(
     needsRefillWarning(unitsRemaining, dosesStillScheduled, course.frequency.timesPerDay) &&
     unitsRemaining !== null
   ) {
+    const medication = await collections.medications.findById(course.medicationId);
     await logAgentEvent({
       patientId: dose.patientId,
       type: 'refill_warning',
@@ -104,7 +108,7 @@ export async function takeDose(
       courseId: course._id,
       conditionId: dose.conditionId,
       channel: 'push',
-      summary: refillWarningMessage(unitsRemaining, course.medicationName),
+      summary: refillWarningMessage(unitsRemaining, course.medicationName, medication?.form ?? 'tablet'),
       message: null,
       escalationNodeId: null,
       visibleToFamily: true,
@@ -303,6 +307,90 @@ export async function replanCourse(
   });
 
   return upcoming.length;
+}
+
+/**
+ * Move every dose still to come onto new mealtimes.
+ *
+ * Changing when you eat is the one setting that moves every reminder, because
+ * the whole schedule is anchored to breakfast, lunch and supper. So it cannot be
+ * a stored preference that only affects the next prescription — the course
+ * already running has to follow, or the app is reminding you at times you have
+ * just told it are wrong.
+ *
+ * This re-anchors rather than shifting by a fixed amount, which is what
+ * `replanCourse` does: supper moving an hour later must not drag breakfast with
+ * it. Each dose's offset from its own anchor is measured against the *old*
+ * mealtimes and preserved, so a dose timed half an hour after food stays half an
+ * hour after food, and a dose an earlier replan had already pushed back keeps
+ * that push.
+ *
+ * Doses already taken, missed or skipped are history and are left alone.
+ */
+export async function reanchorToMealtimes(
+  patientId: string,
+  previous: Mealtimes,
+  next: Mealtimes,
+  now = new Date(),
+): Promise<number> {
+  const patient = await collections.patients.requireById(patientId);
+  const tz = patient.timezone;
+
+  const upcoming = await collections.doses.find(
+    { patientId, status: 'scheduled', scheduledAt: { $gt: now } },
+    { sort: { scheduledAt: 1 } },
+  );
+  if (upcoming.length === 0) return 0;
+
+  const touchedCourseIds = new Set<string>();
+  let moved = 0;
+
+  for (const dose of upcoming) {
+    // The day is read off the dose's own scheduled time, so a dose sitting on
+    // tomorrow re-anchors against tomorrow's breakfast rather than today's.
+    const was = timeOnDay(dose.scheduledAt, 0, anchorTime(dose.anchor, previous), tz);
+    const willBe = timeOnDay(dose.scheduledAt, 0, anchorTime(dose.anchor, next), tz);
+    const offsetMs = dose.scheduledAt.getTime() - was.getTime();
+    const scheduledAt = new Date(willBe.getTime() + offsetMs);
+
+    if (scheduledAt.getTime() === dose.scheduledAt.getTime()) continue;
+
+    await collections.doses.updateById(dose._id, {
+      scheduledAt,
+      rescheduledReason: 'you changed your mealtimes',
+    });
+    touchedCourseIds.add(dose.courseId);
+    moved += 1;
+  }
+
+  if (moved === 0) return 0;
+
+  // The end of a course is the last dose in it, which may have just moved.
+  for (const courseId of touchedCourseIds) {
+    const last = await collections.doses.findOne(
+      { courseId },
+      { sort: { scheduledAt: -1 } },
+    );
+    if (last) await collections.courses.updateById(courseId, { expectedEndAt: last.scheduledAt });
+  }
+
+  await logAgentEvent({
+    patientId,
+    type: 'course_replanned',
+    occurredAt: now,
+    doseId: null,
+    courseId: null,
+    conditionId: null,
+    channel: 'internal',
+    summary: `Moved ${moved} ${moved === 1 ? 'dose' : 'doses'} to fit your new mealtimes`,
+    message: `You changed your mealtimes, so I moved the ${moved} ${
+      moved === 1 ? 'dose' : 'doses'
+    } still to come. Nothing was dropped.`,
+    escalationNodeId: null,
+    visibleToFamily: false,
+  });
+
+  return moved;
 }
 
 /** Close a course once no dose is left outstanding. */

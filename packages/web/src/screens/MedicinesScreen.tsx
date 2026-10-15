@@ -13,10 +13,14 @@ export function MedicinesScreen({
   medicines,
   onOpenCondition,
   onAddPrescription,
+  onOpenRecord,
+  recordSummary,
 }: {
   medicines: MedicinesResponse;
   onOpenCondition: (conditionId: string) => void;
   onAddPrescription: () => void;
+  onOpenRecord: () => void;
+  recordSummary: string;
 }): ReactNode {
   const nothing = medicines.active.length === 0 && medicines.finished.length === 0;
 
@@ -27,7 +31,11 @@ export function MedicinesScreen({
         Everything you take, and what it's for.
       </p>
 
-      <button className="btn btn--primary" style={{ marginBottom: 26 }} onClick={onAddPrescription}>
+      {/* Outline, not the big green one. On this screen the loud button was
+          competing with the only action that matters anywhere in the app —
+          taking a tablet — and it appeared on all four screens at once, twice
+          under a different name. This is now its one home. */}
+      <button className="btn btn--ghost" style={{ marginBottom: 26 }} onClick={onAddPrescription}>
         + Add a prescription
       </button>
 
@@ -57,6 +65,23 @@ export function MedicinesScreen({
           </div>
         </>
       )}
+
+      {/* The record, where the question it answers actually comes up. */}
+      <button className="row-card" style={{ marginTop: 26 }} onClick={onOpenRecord}>
+        <span style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
+          <span style={{ display: 'block', font: '900 17px/1.25 var(--font)' }}>Your record</span>
+          <span
+            style={{
+              display: 'block',
+              font: '600 14.5px/1.35 var(--font)',
+              color: 'var(--ink-soft)',
+            }}
+          >
+            {recordSummary}
+          </span>
+        </span>
+        <span style={{ font: '800 19px/1 var(--font)', color: 'var(--ink-soft)' }}>›</span>
+      </button>
     </div>
   );
 }

@@ -1,5 +1,11 @@
 import type { ReactNode } from 'react';
-import type { DoseView, TodayCourseGroup, TodayResponse } from '@medication-ai/shared';
+import {
+  describeUnits,
+  type DoseView,
+  type TodayCourseGroup,
+  type TodayResponse,
+  type WaitingPrescription,
+} from '@medication-ai/shared';
 import { DayCells, PillIcon, glyphFor } from '../components/common.js';
 
 /**
@@ -28,17 +34,23 @@ export function TodayScreen({
   onOpenDose,
   onOpenCondition,
   onAddPrescription,
+  onStartCourse,
   busy,
 }: {
   today: TodayResponse;
   onOpenDose: (dose: DoseView) => void;
   onOpenCondition: (conditionId: string) => void;
   onAddPrescription: () => void;
+  onStartCourse: (prescriptionId: string) => void;
   busy: boolean;
 }): ReactNode {
   const next = today.nextDose;
   const laterToday = today.doses.filter((dose) => dose._id !== next?._id);
-  const nothingSetUp = today.courseGroups.length === 0;
+  // Nothing set up at all is different from nothing running *yet*: a waiting
+  // prescription means the one thing to do is tell the agent it has arrived,
+  // not fill the form in again.
+  const nothingSetUp = today.courseGroups.length === 0 && today.waiting.length === 0;
+  const nothingRunningYet = today.courseGroups.length === 0 && today.waiting.length > 0;
 
   return (
     <div className="pad">
@@ -54,9 +66,16 @@ export function TodayScreen({
         <NothingSetUp onAdd={onAddPrescription} busy={busy} />
       ) : next ? (
         <NextDoseCard dose={next} onOpen={onOpenDose} busy={busy} />
+      ) : nothingRunningYet ? (
+        <NothingRunningCard count={today.waiting.length} />
       ) : (
         <AllDoneCard />
       )}
+
+      {/* 1b — a prescription the agent is holding until the medicine arrives */}
+      {today.waiting.map((item) => (
+        <WaitingCard key={item._id} item={item} onStart={onStartCourse} busy={busy} />
+      ))}
 
       {/* 2 — the day 3–4 intervention */}
       {today.feelBetterNudge && (
@@ -166,6 +185,75 @@ function AllDoneCard(): ReactNode {
       <div style={{ font: '900 24px/1.25 var(--font)' }}>Nothing left to take today</div>
       <div style={{ font: '600 16px/1.45 var(--font)', color: '#BFE0D3', marginTop: 6 }}>
         I'll remind you when the next one is due.
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A prescription that is saved but not started.
+ *
+ * The clock starts when the tablets are in the house, not when the doctor wrote
+ * the note — so "not yet" is a legitimate answer, and this is where it lands.
+ * Before this card existed the answer was a dead end: the prescription stayed at
+ * `confirmed`, no screen listed it, and the one button that could start it had
+ * just been dismissed.
+ */
+function WaitingCard({
+  item,
+  onStart,
+  busy,
+}: {
+  item: WaitingPrescription;
+  onStart: (prescriptionId: string) => void;
+  busy: boolean;
+}): ReactNode {
+  return (
+    <div className="card card--amber" style={{ marginTop: 14, padding: 20 }}>
+      <div className="eyebrow" style={{ color: 'var(--amber-ink)', marginBottom: 12 }}>
+        Waiting for the medicine
+      </div>
+
+      <div style={{ font: '900 21px/1.25 var(--font)' }}>
+        {item.conditionName ?? item.medicationNames.join(' and ')}
+      </div>
+
+      <div className="stack" style={{ marginTop: 10 }}>
+        {item.lines.map((line) => (
+          <div key={line} style={{ font: '700 15.5px/1.45 var(--font)', color: 'var(--amber-ink)' }}>
+            {line}
+          </div>
+        ))}
+      </div>
+
+      <div
+        style={{ font: '600 14.5px/1.45 var(--font)', color: 'var(--amber-soft)', marginTop: 12 }}
+      >
+        {item.addedLabel} by {item.doctorName}. You told me you hadn't collected it, so I've
+        scheduled nothing and told nobody.
+      </div>
+
+      <button
+        className="btn btn--primary"
+        style={{ marginTop: 16 }}
+        onClick={() => onStart(item._id)}
+        disabled={busy}
+      >
+        I've got it — start today
+      </button>
+    </div>
+  );
+}
+
+/** Nothing running, but something is waiting below. */
+function NothingRunningCard({ count }: { count: number }): ReactNode {
+  return (
+    <div className="card" style={{ padding: 22 }}>
+      <div style={{ font: '900 22px/1.25 var(--font)' }}>Nothing to take today</div>
+      <div style={{ font: '600 15.5px/1.45 var(--font)', color: 'var(--ink-soft)', marginTop: 6 }}>
+        {count === 1
+          ? 'One prescription is waiting on you below.'
+          : `${count} prescriptions are waiting on you below.`}
       </div>
     </div>
   );
@@ -282,9 +370,9 @@ function CourseGroupCard({
 /* -------------------------------------------------------------------------- */
 
 function describeAmount(dose: DoseView): string {
-  const unit = dose.medicationForm === 'capsule' ? 'capsule' : 'tablet';
-  const amount = `${dose.amount} ${dose.amount === 1 ? unit : `${unit}s`}`;
-  return `${amount} at ${dose.clockTime}`;
+  // The unit comes from the real dosage form, so an inhaler is puffs and a
+  // bottle is doses rather than everything being a tablet.
+  return `${describeUnits(dose.amount, dose.medicationForm)} at ${dose.clockTime}`;
 }
 
 /** Status in words a patient reads, not the status the database stores. */

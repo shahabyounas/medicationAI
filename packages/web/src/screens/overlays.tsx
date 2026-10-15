@@ -1,13 +1,14 @@
 import type { ReactNode } from 'react';
 import {
   VISIT_TYPE_LABELS,
+  describeUnits,
   type CourseReport,
   type DoseView,
   type PrescriptionDetail,
   type VisitDetail,
 } from '@medication-ai/shared';
 import { AgentMark, PillIcon, glyphFor } from '../components/common.js';
-import { formatDate } from './VisitsScreen.js';
+import { formatDate } from './RecordScreen.js';
 
 /**
  * The full-screen steps.
@@ -54,7 +55,7 @@ export function DoseOverlay({
         <div>
           <div style={{ font: '900 34px/1.12 var(--font)' }}>{dose.medicationName}</div>
           <div style={{ font: '600 20px/1.4 var(--font)', color: '#A9B3AC', marginTop: 6 }}>
-            Take {dose.amount} tablet
+            Take {describeUnits(dose.amount, dose.medicationForm)}
           </div>
           <div style={{ font: '600 17px/1.4 var(--font)', color: 'var(--amber)', marginTop: 12 }}>
             Dose {dose.doseNumber} · {dose.clockTime}
@@ -71,19 +72,30 @@ export function DoseOverlay({
         >
           I took it ✓
         </button>
-        <div style={{ display: 'flex', gap: 12 }}>
-          <button className="btn btn--onDark" onClick={onSnooze} disabled={busy}>
-            Remind in 30 min
-          </button>
-          <button
-            className="btn btn--onDark"
-            style={{ flex: 'none', width: 104, color: '#8B948D' }}
-            onClick={onSkip}
-            disabled={busy}
-          >
-            Skip
-          </button>
-        </div>
+        <button className="btn btn--onDark" onClick={onSnooze} disabled={busy}>
+          Remind me in 30 minutes
+        </button>
+
+        {/*
+          Skipping is not a peer of snoozing. A skipped dose is one the course
+          finishes without, which is the exact failure this whole app exists to
+          prevent — and it used to sit as a button two inches from "I took it",
+          where a mis-tap costs a tablet. It is a deliberate choice now, worded
+          so what it means is on the control itself.
+        */}
+        <button
+          onClick={onSkip}
+          disabled={busy}
+          style={{
+            minHeight: 48,
+            font: '700 15.5px/1.4 var(--font)',
+            color: '#A9B4AE',
+            textDecoration: 'underline',
+            textUnderlineOffset: 3,
+          }}
+        >
+          I'm not taking this one
+        </button>
       </div>
     </div>
   );
@@ -275,7 +287,9 @@ export function VisitOverlay({
               {vitals.temperatureC !== undefined && (
                 <Vital label="Temperature" value={`${vitals.temperatureC}°C`} />
               )}
-              {vitals.pulseBpm !== undefined && <Vital label="Pulse" value={`${vitals.pulseBpm}`} />}
+              {vitals.pulseBpm !== undefined && (
+                <Vital label="Pulse" value={`${vitals.pulseBpm} bpm`} />
+              )}
               {vitals.weightKg !== undefined && (
                 <Vital label="Weight" value={`${vitals.weightKg} kg`} />
               )}

@@ -103,57 +103,6 @@ export function glyphFor(form: MedicationForm): 'capsule' | 'tablet' | 'oblong' 
   }
 }
 
-export function ProgressRing({
-  percent,
-  size = 76,
-}: {
-  percent: number;
-  size?: number;
-}): ReactNode {
-  const stroke = 9;
-  const radius = (size - stroke * 2) / 2 + stroke / 2;
-  const circumference = 2 * Math.PI * radius;
-  const filled = (Math.min(100, Math.max(0, percent)) / 100) * circumference;
-
-  return (
-    <div style={{ position: 'relative', width: size, height: size, flex: 'none' }}>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true">
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          stroke="var(--canvas)"
-          strokeWidth={stroke}
-        />
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          stroke="var(--green)"
-          strokeWidth={stroke}
-          strokeLinecap="round"
-          strokeDasharray={`${filled} ${circumference}`}
-          transform={`rotate(-90 ${size / 2} ${size / 2})`}
-        />
-      </svg>
-      <div
-        style={{
-          position: 'absolute',
-          inset: 0,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          font: '900 18px/1 var(--font)',
-        }}
-      >
-        {Math.round(percent)}%
-      </div>
-    </div>
-  );
-}
-
 export function DayCells({
   cells,
 }: {
@@ -188,27 +137,6 @@ export function ErrorState({ message, onRetry }: { message: string; onRetry?: ()
           Try again
         </button>
       )}
-    </div>
-  );
-}
-
-export function EmptyState({ title, body }: { title: string; body: string }): ReactNode {
-  return (
-    <div className="centre-state">
-      <div className="h2">{title}</div>
-      <div className="sub">{body}</div>
-    </div>
-  );
-}
-
-export function StatusBar(): ReactNode {
-  const time = new Intl.DateTimeFormat('en-GB', { hour: 'numeric', minute: '2-digit' }).format(
-    new Date(),
-  );
-  return (
-    <div className="status-bar">
-      <span>{time}</span>
-      <span style={{ letterSpacing: 2 }}>▮▮▮ ▾</span>
     </div>
   );
 }

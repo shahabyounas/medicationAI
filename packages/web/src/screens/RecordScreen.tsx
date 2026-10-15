@@ -15,28 +15,36 @@ import {
  * "who is the doctor who treats my chest?" (the list of doctors). Neither is
  * derivable from the medicines list alone, which is why visits are their own
  * record rather than a field on a prescription.
+ *
+ * It used to be a fourth tab called "Record", permanently in the bottom bar
+ * beside the dose that needs taking. It is reference material — consulted when
+ * something prompts the question, not daily — so it has traded its tab for a
+ * row at the bottom of Medicines, which is where that question gets asked.
  */
-export function VisitsScreen({
+export function RecordScreen({
   data,
   onOpenVisit,
-  onAddPrescription,
+  onClose,
 }: {
   data: VisitsResponse;
   onOpenVisit: (visit: VisitDetail) => void;
-  onAddPrescription: () => void;
+  onClose: () => void;
 }): ReactNode {
   const [tab, setTab] = useState<'timeline' | 'doctors'>('timeline');
 
   return (
-    <div className="pad">
-      <h1 className="h1">Your record</h1>
-      <p className="sub" style={{ marginBottom: 18 }}>
-        Every appointment, and who you saw.
-      </p>
-
-      <button className="btn btn--primary" style={{ marginBottom: 18 }} onClick={onAddPrescription}>
-        + Record a visit and prescription
+    <div className="overlay overlay--light">
+      <button className="back" onClick={onClose}>
+        ← My medicines
       </button>
+
+      <h1 className="h1" style={{ marginTop: 10 }}>
+        Your record
+      </h1>
+      <p className="sub" style={{ marginBottom: 18 }}>
+        Every appointment, and who you saw. Each prescription you add is filed against the doctor
+        who wrote it.
+      </p>
 
       <Segmented
         value={tab}

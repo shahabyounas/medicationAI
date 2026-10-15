@@ -12,6 +12,7 @@ import { CourseProgressSchema, CourseSchema } from '../schemas/course.js';
 import { DoctorSpecialtySchema, DoctorWithHistorySchema } from '../schemas/doctor.js';
 import { DoseSchema } from '../schemas/dose.js';
 import { MedicationFormSchema, MedicationSchema } from '../schemas/medication.js';
+import { MealtimesSchema } from '../schemas/patient.js';
 import { PrescriptionSchema, PrescriptionSourceSchema } from '../schemas/prescription.js';
 import { VisitDetailSchema, VisitTypeSchema } from '../schemas/visit.js';
 
@@ -70,6 +71,27 @@ export const TodayCourseGroupSchema = z.object({
 });
 export type TodayCourseGroup = z.infer<typeof TodayCourseGroupSchema>;
 
+/**
+ * A prescription that is saved but has not started, because the patient said
+ * they had not collected the medicine yet.
+ *
+ * It has to reach the home screen. Answering "not yet" used to close the
+ * read-back and leave the prescription sitting at `confirmed` for good: nothing
+ * listed that state and the only button that could start it had just been
+ * dismissed, so the course could never begin.
+ */
+export const WaitingPrescriptionSchema = z.object({
+  _id: IdSchema,
+  doctorName: NonEmptyString,
+  conditionName: z.string().nullable(),
+  medicationNames: z.array(NonEmptyString),
+  /** One plain-words line per medicine. */
+  lines: z.array(NonEmptyString),
+  /** "Added today", "Added yesterday", "Added on 12 October". */
+  addedLabel: NonEmptyString,
+});
+export type WaitingPrescription = z.infer<typeof WaitingPrescriptionSchema>;
+
 export const TodayResponseSchema = z.object({
   patientName: NonEmptyString,
   timeZone: NonEmptyString,
@@ -97,6 +119,13 @@ export const TodayResponseSchema = z.object({
    * things; the home screen has to hold more than one at a time.
    */
   courseGroups: z.array(TodayCourseGroupSchema),
+  /**
+   * Prescriptions waiting on the medicine arriving. Usually empty.
+   *
+   * On the home screen rather than buried in Medicines, because until one of
+   * these starts the patient has no doses at all — it is the only thing to do.
+   */
+  waiting: z.array(WaitingPrescriptionSchema),
 });
 export type TodayResponse = z.infer<typeof TodayResponseSchema>;
 
@@ -184,6 +213,15 @@ export const FamilyResponseSchema = z.object({
     }),
   ),
   recentEscalations: z.array(AgentEventSchema),
+  /**
+   * The times the whole schedule is anchored to.
+   *
+   * Every screen tells the patient their doses were "planned around your
+   * mealtimes" and nothing has ever shown them what those times are, let alone
+   * let them be corrected — so a schedule built on a wrong supper time stays
+   * wrong, and the reminders look arbitrary.
+   */
+  mealtimes: MealtimesSchema,
 });
 export type FamilyResponse = z.infer<typeof FamilyResponseSchema>;
 

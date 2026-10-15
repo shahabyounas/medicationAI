@@ -1,5 +1,4 @@
 import {
-  MEDICATION_FORM_LABELS,
   MINUTE_MS,
   MISSED_AFTER_MINUTES,
   escalationMessage,
@@ -372,7 +371,7 @@ async function buildMessageContext(
     patientName: patient.name.split(' ')[0] ?? patient.name,
     medicationName: course.medicationName,
     amount: dose.amount,
-    unitLabel: MEDICATION_FORM_LABELS[medication?.form ?? 'tablet'],
+    form: medication?.form ?? 'tablet',
     scheduledAt: dose.scheduledAt,
     timeZone: patient.timezone,
     doseNumber: dose.doseNumber,
