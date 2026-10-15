@@ -38,7 +38,8 @@ import { describeItem, totalUnitsFor } from './prescriptionService.js';
  * next to it.
  */
 
-function toDoseView(
+/** Exposed for the record screen, so a dose reads the same on both. */
+export function toDoseView(
   dose: Dose,
   timeZone: string,
   formByCourseId: Map<string, MedicationForm>,
@@ -53,7 +54,7 @@ function toDoseView(
 }
 
 /** The dosage form behind each course, so the icons depict the real medicine. */
-async function medicationFormsByCourse(
+export async function medicationFormsByCourse(
   courses: readonly Course[],
 ): Promise<Map<string, MedicationForm>> {
   const medicationIds = [...new Set(courses.map((c) => c.medicationId))];
@@ -62,7 +63,7 @@ async function medicationFormsByCourse(
   return new Map(courses.map((c) => [c._id, formById.get(c.medicationId) ?? 'tablet']));
 }
 
-function greetingFor(instant: Date, timeZone: string): string {
+export function greetingFor(instant: Date, timeZone: string): string {
   const hour = Number.parseInt(
     new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', hourCycle: 'h23' }).format(
       instant,
@@ -85,7 +86,7 @@ function greetingFor(instant: Date, timeZone: string): string {
  * means the day is 23 or 25 hours long across a clock change rather than
  * always 24.
  */
-function dayWindowIn(instant: Date, timeZone: string): { start: Date; end: Date } {
+export function dayWindowIn(instant: Date, timeZone: string): { start: Date; end: Date } {
   return {
     start: timeOnDay(instant, 0, '00:00', timeZone),
     end: timeOnDay(instant, 1, '00:00', timeZone),
@@ -160,7 +161,7 @@ export async function buildToday(patientId: string, now = new Date()): Promise<T
  * to be a one-way door: the prescription stayed confirmed forever and no screen
  * could start it. Surfacing it here is what makes that answer reversible.
  */
-async function buildWaiting(
+export async function buildWaiting(
   patientId: string,
   now: Date,
   timeZone: string,
@@ -473,7 +474,8 @@ export async function buildMedicines(patientId: string, now = new Date()): Promi
   };
 }
 
-function instructionLineFor(course: Course, form: MedicationForm): string {
+/** Exposed for the record screen: "1 tablet · 3 times a day · after food". */
+export function instructionLineFor(course: Course, form: MedicationForm): string {
   const amount = describeUnits(course.amountPerDose, form);
   const times =
     course.frequency.timesPerDay === 1

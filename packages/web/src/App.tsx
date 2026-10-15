@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type {
+  ConditionHistory,
   CourseReport,
   DoseView,
+  HistoryResponse,
   FamilyResponse,
   Mealtimes,
   IntakeOptionsResponse,
   IntakeRequest,
   MedicinesResponse,
   PrescriptionDetail,
-  TodayResponse,
   VisitDetail,
   VisitsResponse,
 } from '@medication-ai/shared';
@@ -16,7 +17,8 @@ import { ApiError, api } from './api/client.js';
 import { useAgentClock } from './agentClock.js';
 import { AgentMark, ErrorState, Loading } from './components/common.js';
 import { OverlayRoot } from './components/OverlayRoot.js';
-import { TodayScreen } from './screens/TodayScreen.js';
+import { HistoryScreen } from './screens/HistoryScreen.js';
+import { ConditionScreen } from './screens/ConditionScreen.js';
 import { MedicinesScreen } from './screens/MedicinesScreen.js';
 import { RecordScreen } from './screens/RecordScreen.js';
 import { RemindersScreen } from './screens/RemindersScreen.js';
@@ -30,15 +32,19 @@ import {
 } from './screens/overlays.js';
 
 /**
- * Three tabs, not four.
+ * Three tabs, with the lifetime record as home.
  *
- * "Medicines" and "Record" both answered *what am I on?*, and course progress
- * was drawn three different ways across them — a percentage bar on one screen,
- * day cells and counts on another, a third version in the report. The record is
- * now a row at the bottom of Medicines, and "Family" has become "Reminders",
- * which is the question that screen was really answering.
+ * The app's job is to keep a patient's whole healthcare history — every
+ * illness, every appointment, every course, every tablet actually swallowed —
+ * for as long as they keep using it. That record is the product, so it is the
+ * screen the app opens on.
+ *
+ * Today did not become a fourth tab for it. A dose due in ten minutes and an
+ * illness from 2019 belong to one chronology, so the present is the top of the
+ * record rather than a screen beside it. "Medicines" still answers the separate
+ * question *what am I on right now?*, and "Reminders" holds the settings.
  */
-type Tab = 'today' | 'medicines' | 'reminders';
+type Tab = 'record' | 'medicines' | 'reminders';
 
 type Overlay =
   | { kind: 'none' }
@@ -48,7 +54,8 @@ type Overlay =
   | { kind: 'report'; report: CourseReport }
   | { kind: 'intake'; options: IntakeOptionsResponse }
   | { kind: 'readback'; detail: PrescriptionDetail }
-  | { kind: 'record'; data: VisitsResponse };
+  | { kind: 'record'; data: VisitsResponse }
+  | { kind: 'condition'; data: ConditionHistory };
 
 /**
  * What a step is called, for a screen reader announcing the dialog, and what to
@@ -72,6 +79,8 @@ function describeOverlay(overlay: Overlay): { label: string; confirmClose: strin
       return { label: `Course report — ${overlay.report.conditionName}`, confirmClose: null };
     case 'record':
       return { label: 'Your record', confirmClose: null };
+    case 'condition':
+      return { label: overlay.data.name, confirmClose: null };
     case 'intake':
       return {
         label: 'Add a prescription',
@@ -99,7 +108,7 @@ function summariseRecord(visits: VisitsResponse): string {
 }
 
 interface Data {
-  today: TodayResponse;
+  history: HistoryResponse;
   medicines: MedicinesResponse;
   visits: VisitsResponse;
   family: FamilyResponse;
@@ -115,8 +124,8 @@ interface Data {
  */
 const TABS: { id: Tab; icon: ReactNode; label: string }[] = [
   {
-    id: 'today',
-    label: 'Today',
+    id: 'record',
+    label: 'Record',
     icon: (
       <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         <circle cx="12" cy="12" r="9" />
@@ -156,6 +165,7 @@ const TAB_IDS = TABS.map((tab) => tab.id);
  * them rather than silently falling back to Today.
  */
 const RETIRED_TABS: Record<string, Tab> = {
+  today: 'record',
   visits: 'medicines',
   family: 'reminders',
 };
@@ -163,7 +173,7 @@ const RETIRED_TABS: Record<string, Tab> = {
 function tabFromHash(): Tab {
   const candidate = window.location.hash.replace('#', '');
   if (TAB_IDS.includes(candidate as Tab)) return candidate as Tab;
-  return RETIRED_TABS[candidate] ?? 'today';
+  return RETIRED_TABS[candidate] ?? 'record';
 }
 
 export function App(): ReactNode {
@@ -183,13 +193,13 @@ export function App(): ReactNode {
    * The whole payload is small and this keeps the screens from disagreeing.
    */
   const refresh = useCallback(async (id: string) => {
-    const [today, medicines, visits, family] = await Promise.all([
-      api.today(id),
+    const [history, medicines, visits, family] = await Promise.all([
+      api.history(id),
       api.medicines(id),
       api.visits(id),
       api.family(id),
     ]);
-    setData({ today, medicines, visits, family });
+    setData({ history, medicines, visits, family });
   }, []);
 
   const load = useCallback(async () => {
@@ -235,7 +245,7 @@ export function App(): ReactNode {
    */
   const needsAttention = useMemo(() => {
     if (!data) return false;
-    return data.today.doses.some((dose) => dose.status === 'due' || dose.status === 'missed');
+    return data.history.todayDoses.some((d) => d.status === 'due' || d.status === 'missed');
   }, [data]);
 
   /**
@@ -280,7 +290,10 @@ export function App(): ReactNode {
 
   const openReport = useCallback(
     async (conditionId?: string) => {
-      const id = conditionId ?? data?.today.courseGroups.find((g) => g.conditionId)?.conditionId;
+      const id =
+        conditionId ??
+        data?.medicines.active[0]?._id ??
+        data?.medicines.finished[0]?._id;
       if (!id) return;
       try {
         setOverlay({ kind: 'report', report: await api.report(id) });
@@ -343,7 +356,7 @@ export function App(): ReactNode {
         const result = await api.startPrescription(prescriptionId);
         await refresh(patientId);
         setOverlay({ kind: 'none' });
-        goToTab('today');
+        goToTab('record');
         setNotice(
           `${result.dosesScheduled} doses planned around your mealtimes. I'll take it from here.`,
         );
@@ -354,6 +367,24 @@ export function App(): ReactNode {
       }
     },
     [busy, patientId, refresh, goToTab],
+  );
+
+  /** One illness in full — the visits, the medicines and every dose taken. */
+  const openCondition = useCallback(async (conditionId: string) => {
+    try {
+      setOverlay({ kind: 'condition', data: await api.conditionHistory(conditionId) });
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : 'Could not open that.');
+    }
+  }, []);
+
+  /** A visit note, reached from the record by id rather than by object. */
+  const openVisit = useCallback(
+    (visitId: string) => {
+      const visit = data?.visits.visits.find((v) => v._id === visitId);
+      if (visit) setOverlay({ kind: 'visit', visit });
+    },
+    [data],
   );
 
   /** The record, opened from Medicines rather than owning a tab. */
@@ -428,14 +459,14 @@ export function App(): ReactNode {
             <div style={{ font: '900 17px/1.2 var(--font)' }}>Medication Agent</div>
             {data && (
               <div style={{ font: '600 13px/1.3 var(--font)', color: 'var(--green)' }}>
-                {data.today.patientName}
+                {data.history.patientName}
               </div>
             )}
           </div>
         </div>
 
         {TABS.map((item) => {
-          const attention = item.id === 'today' && needsAttention && tab !== 'today';
+          const attention = item.id === 'record' && needsAttention && tab !== 'record';
           return (
             <button
               key={item.id}
@@ -487,12 +518,13 @@ export function App(): ReactNode {
                 </div>
               )}
 
-              {tab === 'today' && (
-                <TodayScreen
-                  today={data.today}
+              {tab === 'record' && (
+                <HistoryScreen
+                  history={data.history}
                   busy={busy}
                   onOpenDose={(dose) => setOverlay({ kind: 'dose', dose })}
-                  onOpenCondition={(id) => void openReport(id)}
+                  onOpenCondition={(id) => void openCondition(id)}
+                  onOpenVisit={(id) => void openVisit(id)}
                   onAddPrescription={() => void openIntake()}
                   onStartCourse={(id) => void startCourse(id)}
                 />
@@ -500,7 +532,7 @@ export function App(): ReactNode {
               {tab === 'medicines' && (
                 <MedicinesScreen
                   medicines={data.medicines}
-                  onOpenCondition={(id) => void openReport(id)}
+                  onOpenCondition={(id) => void openCondition(id)}
                   onAddPrescription={() => void openIntake()}
                   onOpenRecord={openRecord}
                   recordSummary={summariseRecord(data.visits)}
@@ -513,7 +545,7 @@ export function App(): ReactNode {
                   busy={busy}
                   onSaveMealtimes={(mealtimes) => void saveMealtimes(mealtimes)}
                   onOpenReport={() => void openReport()}
-                  reportAvailable={data.today.courseGroups.some((g) => g.conditionId !== null)}
+                  reportAvailable={data.medicines.active.length + data.medicines.finished.length > 0}
                 />
               )}
             </div>
@@ -521,7 +553,7 @@ export function App(): ReactNode {
             {/* Mobile navigation. */}
             <nav className="tabbar">
               {TABS.map((item) => {
-                const attention = item.id === 'today' && needsAttention && tab !== 'today';
+                const attention = item.id === 'record' && needsAttention && tab !== 'record';
                 return (
                   <button
                     key={item.id}
@@ -564,6 +596,13 @@ export function App(): ReactNode {
             )}
             {overlay.kind === 'report' && (
               <ReportOverlay report={overlay.report} onClose={closeOverlay} />
+            )}
+            {overlay.kind === 'condition' && (
+              <ConditionScreen
+                condition={overlay.data}
+                onClose={closeOverlay}
+                onOpenVisit={(id) => openVisit(id)}
+              />
             )}
             {overlay.kind === 'record' && (
               <RecordScreen

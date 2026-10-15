@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import {
+  ConditionHistorySchema,
   ConditionSchema,
   CreateConditionSchema,
   CreateDoctorSchema,
@@ -14,6 +15,7 @@ import {
 import { collections } from '../db/collections.js';
 import { asyncHandler, parseBody, pathParam } from '../http/errors.js';
 import { getVisitDetail, listDoctorsWithHistory, listVisitDetails } from '../services/recordService.js';
+import { buildConditionHistory } from '../services/historyService.js';
 
 /**
  * Doctors, visits and conditions — the medical record.
@@ -113,6 +115,14 @@ recordsRouter.delete(
 );
 
 // --- Conditions ------------------------------------------------------------
+
+recordsRouter.get(
+  '/conditions/:conditionId/history',
+  asyncHandler(async (req, res) => {
+    const history = await buildConditionHistory(pathParam(req, 'conditionId'));
+    res.json(ConditionHistorySchema.parse(history));
+  }),
+);
 
 recordsRouter.get(
   '/conditions',
