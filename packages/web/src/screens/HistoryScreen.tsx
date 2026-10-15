@@ -4,6 +4,7 @@ import {
   type DoseView,
   type HistoryEntry,
   type HistoryEntryKind,
+  type HistoryEpisode,
   type HistoryResponse,
   type HistoryYear,
   type WaitingPrescription,
@@ -18,10 +19,19 @@ import { PillIcon, glyphFor } from '../components/common.js';
  * has happened to this patient — and that is the only arrangement where a
  * lifetime of history cannot bury it.
  *
+ * **An illness is one card, not four log lines.** A single appointment
+ * produces four entries of equal weight — saw the doctor, got a diagnosis,
+ * started two medicines — and listing those is an event log; it is why a
+ * record feels long. The card carries what the lines cannot say between them:
+ * how the illness ended, and how much of the course was actually taken.
+ *
  * Two things keep it readable once there are years of it:
  *
  *  - **The ribbon.** Bar height is how much happened that year, so illness
  *    clusters show before a word is read, and it doubles as the jump control.
+ *    Years where nothing happened keep their place in it: a flat year is
+ *    information, and dropping it would put 2021 next to 2023 as though the
+ *    gap were not there.
  *  - **One line a year.** Only the newest year is open. Everything earlier
  *    collapses to a row with its count, which is enough to decide whether to
  *    look — a screen that renders a decade at once is a screen nobody scrolls.
@@ -49,7 +59,18 @@ export function HistoryScreen({
   );
 
   const years = useMemo(() => filterYears(history.years, filter), [history.years, filter]);
-  const busiest = years.reduce((most, year) => Math.max(most, year.entryCount), 0);
+  const ribbon = useMemo(() => ribbonYears(years), [years]);
+  const busiest = ribbon.reduce((most, year) => Math.max(most, year.entryCount), 0);
+
+  // What is true right now, before any history: the illnesses still running.
+  const current = useMemo(
+    () =>
+      history.years
+        .flatMap((year) => year.episodes)
+        .filter((episode) => episode.state === 'in_progress' || episode.state === 'ongoing')
+        .slice(0, 2),
+    [history.years],
+  );
 
   const nothingAtAll =
     history.years.length === 0 && history.waiting.length === 0 && history.todayDoses.length === 0;
@@ -66,28 +87,31 @@ export function HistoryScreen({
         </span>
       </div>
       <p className="sub" style={{ marginBottom: 16 }}>
-        {history.totals.spanLabel}. {history.greeting}.
+        {[
+          history.totals.spanLabel,
+          countOf(history.totals.conditions, 'illness', 'illnesses'),
+          countOf(history.totals.visits, 'appointment', 'appointments'),
+          `${history.totals.dosesTaken} doses taken`,
+        ].join(' · ')}
       </p>
 
-      {/* What it adds up to. Real counts — nothing here is an estimate. */}
-      {!nothingAtAll && (
-        <div className="totals" style={{ marginBottom: 20 }}>
-          <Total value={history.totals.conditions} label="illnesses" one="illness" />
-          <Total value={history.totals.visits} label="appointments" one="appointment" />
-          <Total value={history.totals.medicines} label="medicines" one="medicine" />
-          <Total value={history.totals.dosesTaken} label="doses taken" one="dose taken" />
+      {/* 1 — what is true right now */}
+      {current.length > 0 && (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+          {current.map((episode) => (
+            <CurrentChip key={episode.conditionId} episode={episode} onOpen={onOpenCondition} />
+          ))}
         </div>
       )}
 
-      {/* 1 — the present, at the top of its own chronology */}
+      {/* 2 — the one thing to do now, when there is one. The record is the
+          screen, but a dose waiting is still the reason the app exists. */}
       {nothingAtAll ? (
         <NothingSetUp onAdd={onAddPrescription} busy={busy} />
       ) : history.due ? (
         <DoseCard dose={history.due} due onOpen={onOpenDose} busy={busy} />
       ) : history.nextDose ? (
-        <DoseCard dose={history.nextDose} due={false} onOpen={onOpenDose} busy={busy} />
-      ) : history.todayDoses.length > 0 ? (
-        <AllDoneCard />
+        <NextDoseLine dose={history.nextDose} onOpen={onOpenDose} busy={busy} />
       ) : null}
 
       {history.waiting.map((item) => (
@@ -96,18 +120,9 @@ export function HistoryScreen({
 
       {history.years.length > 0 && (
         <>
-          {/* 2 — where you are in the record, and where to jump */}
-          <Ribbon years={years} busiest={busiest} onJump={openYear} />
+          <Ribbon years={ribbon} busiest={busiest} onJump={openYear} />
 
-          {/* 3 — what kind of thing you are looking for */}
-          <div
-            style={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: 7,
-              marginTop: 18,
-            }}
-          >
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginTop: 18 }}>
             {FILTERS.map((option) => (
               <button
                 key={option.id}
@@ -125,7 +140,6 @@ export function HistoryScreen({
             ))}
           </div>
 
-          {/* 4 — the record itself */}
           {years.length === 0 ? (
             <p className="sub" style={{ marginTop: 22 }}>
               Nothing of that kind in the record yet.
@@ -154,6 +168,10 @@ export function HistoryScreen({
   );
 }
 
+function countOf(value: number, one: string, many: string): string {
+  return `${value} ${value === 1 ? one : many}`;
+}
+
 /* -------------------------------------------------------------------------- */
 /* The filters                                                                */
 /* -------------------------------------------------------------------------- */
@@ -161,7 +179,9 @@ export function HistoryScreen({
 type FilterId = 'all' | 'illnesses' | 'appointments' | 'medicines';
 
 const FILTER_KINDS: Record<Exclude<FilterId, 'all'>, readonly HistoryEntryKind[]> = {
-  illnesses: ['condition_opened', 'condition_resolved', 'condition_recurred'],
+  // An illness is shown as its card, so the entries it is built from would
+  // only repeat it.
+  illnesses: [],
   appointments: ['visit'],
   medicines: ['course_started', 'course_completed', 'course_stopped'],
 };
@@ -174,83 +194,99 @@ const FILTERS: { id: FilterId; label: string }[] = [
 ];
 
 /**
- * A filter narrows what is shown, including the ribbon.
+ * What each year shows, per filter.
  *
- * Counting the whole record while showing a slice of it would mean a year whose
- * bar is tall and whose list is empty — the one thing the ribbon must never do,
- * since its entire job is to say where the record is dense.
+ * "Everything" is the cards plus whatever belongs to no illness — a routine
+ * check with nothing attached. Listing an illness's own visits beside its card
+ * would put the event log straight back on the screen.
  */
 function filterYears(years: readonly HistoryYear[], filter: FilterId): HistoryYear[] {
-  if (filter === 'all') return [...years];
-  const kinds = FILTER_KINDS[filter];
-
   return years
     .map((year) => {
+      const episodes = filter === 'all' || filter === 'illnesses' ? year.episodes : [];
+      const carded = new Set(episodes.map((episode) => episode.conditionId));
+
+      // Under "Everything" an entry is dropped only when a card on this same
+      // year already stands for it. An annual review in a quiet year belongs to
+      // a condition whose card is years earlier, and hiding it would leave the
+      // year looking empty when it was not.
+      const keep = (entry: HistoryEntry): boolean =>
+        filter === 'all'
+          ? entry.conditionId === null || !carded.has(entry.conditionId)
+          : FILTER_KINDS[filter].includes(entry.kind);
+
       const months = year.months
-        .map((month) => ({
-          ...month,
-          entries: month.entries.filter((entry) => kinds.includes(entry.kind)),
-        }))
+        .map((month) => ({ ...month, entries: month.entries.filter(keep) }))
         .filter((month) => month.entries.length > 0);
 
       return {
         ...year,
+        episodes,
         months,
-        entryCount: months.reduce((sum, month) => sum + month.entries.length, 0),
+        shown: episodes.length + months.reduce((sum, month) => sum + month.entries.length, 0),
       };
     })
-    .filter((year) => year.entryCount > 0);
+    .filter((year) => year.shown > 0)
+    .map(({ shown: _shown, ...year }) => year);
 }
 
 /* -------------------------------------------------------------------------- */
 /* The ribbon                                                                 */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Every year the record spans, not only the ones with something in them.
+ *
+ * A ribbon that skips 2022 puts 2021 next to 2023 and quietly claims the
+ * record is denser than it is. The empty years get the minimum bar and no
+ * link, which reads as what they are: nothing happened.
+ */
+function ribbonYears(years: readonly HistoryYear[]): { year: number; label: string; entryCount: number }[] {
+  if (years.length === 0) return [];
+  const numbers = years.map((year) => year.year);
+  const first = Math.min(...numbers);
+  const last = Math.max(...numbers);
+  const counts = new Map(years.map((year) => [year.year, year.entryCount]));
+
+  const out = [];
+  for (let year = first; year <= last; year += 1) {
+    out.push({ year, label: String(year), entryCount: counts.get(year) ?? 0 });
+  }
+  return out;
+}
+
 function Ribbon({
   years,
   busiest,
   onJump,
 }: {
-  years: readonly HistoryYear[];
+  years: readonly { year: number; label: string; entryCount: number }[];
   busiest: number;
   onJump: (year: number) => void;
 }): ReactNode {
   if (years.length === 0) return null;
-
-  // Oldest on the left, so the ribbon reads the way a timeline does even though
-  // the list beneath it runs the other way.
-  const ordered = [...years].sort((a, b) => a.year - b.year);
-  const newest = ordered[ordered.length - 1]?.year;
+  const newest = years[years.length - 1]?.year;
 
   return (
     <nav aria-label="Jump to a year" style={{ marginTop: 22 }}>
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 7 }}>
-        {ordered.map((year) => {
+        {years.map((year) => {
           const current = year.year === newest;
-          return (
-            <a
-              key={year.year}
-              href={`#year-${year.year}`}
-              onClick={() => onJump(year.year)}
-              style={{
-                flex: 1,
-                minWidth: 0,
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: 6,
-                textDecoration: 'none',
-              }}
-            >
+          const bar = (
+            <>
               <span
                 style={{
                   width: '100%',
-                  // A floor of 6px: a year with one entry still has to be a
-                  // target you can hit, and an invisible bar reads as a gap in
-                  // the record rather than a quiet year.
-                  height: Math.max(6, Math.round((year.entryCount / Math.max(1, busiest)) * 42)),
+                  // Floor of 5px so an empty year is still a mark on the
+                  // timeline; 40px ceiling so a busy year is a bar, not a block.
+                  height: Math.max(5, Math.round((year.entryCount / Math.max(1, busiest)) * 40)),
                   borderRadius: 3,
-                  background: current ? 'var(--green)' : 'var(--canvas)',
+                  display: 'block',
+                  background: current
+                    ? 'var(--green)'
+                    : year.entryCount === 0
+                      ? 'var(--canvas)'
+                      : '#9BB5A8',
                 }}
               />
               <span
@@ -261,6 +297,27 @@ function Ribbon({
               >
                 {year.label}
               </span>
+            </>
+          );
+
+          const style = {
+            flex: 1,
+            minWidth: 0,
+            display: 'flex',
+            flexDirection: 'column' as const,
+            alignItems: 'center' as const,
+            gap: 6,
+            textDecoration: 'none',
+          };
+
+          // Nothing to jump to in an empty year, so it is not a link.
+          return year.entryCount === 0 ? (
+            <span key={year.year} style={style}>
+              {bar}
+            </span>
+          ) : (
+            <a key={year.year} href={`#year-${year.year}`} onClick={() => onJump(year.year)} style={style}>
+              {bar}
             </a>
           );
         })}
@@ -286,46 +343,186 @@ function YearSection({
   onOpenCondition: (conditionId: string) => void;
   onOpenVisit: (visitId: string) => void;
 }): ReactNode {
+  const loose = year.months.flatMap((month) => month.entries);
+
   return (
     <section id={`year-${year.year}`} style={{ marginTop: 22, scrollMarginTop: 16 }}>
       <button className="year-head" onClick={onToggle} aria-expanded={open} style={{ width: '100%' }}>
         <span className="h2">{year.label}</span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
           <span style={{ font: '700 13px/1 var(--font)', color: 'var(--ink-soft)' }}>
-            {year.entryCount} {year.entryCount === 1 ? 'entry' : 'entries'}
+            {summarise(year)}
           </span>
           <span className="chev">{open ? '⌃' : '⌄'}</span>
         </span>
       </button>
 
-      {open &&
-        year.months.map((month) => (
-          <div key={month.month} style={{ marginTop: 14 }}>
-            <div className="eyebrow" style={{ marginBottom: 9 }}>
-              {month.label}
-            </div>
-            <div className="stack">
-              {month.entries.map((entry) => (
-                <EntryRow
-                  key={entry.id}
-                  entry={entry}
-                  onOpenCondition={onOpenCondition}
-                  onOpenVisit={onOpenVisit}
-                />
-              ))}
-            </div>
-          </div>
-        ))}
+      {open && (
+        <div className="stack" style={{ marginTop: 14 }}>
+          {year.episodes.map((episode) => (
+            <EpisodeCard key={episode.conditionId} episode={episode} onOpen={onOpenCondition} />
+          ))}
+          {loose.map((entry) => (
+            <EntryRow
+              key={entry.id}
+              entry={entry}
+              onOpenCondition={onOpenCondition}
+              onOpenVisit={onOpenVisit}
+            />
+          ))}
+        </div>
+      )}
     </section>
   );
 }
 
+/** "3 illnesses · 4 appointments" — the design's own year summary. */
+function summarise(year: HistoryYear): string {
+  const visits = year.months
+    .flatMap((month) => month.entries)
+    .filter((entry) => entry.kind === 'visit').length;
+
+  const parts: string[] = [];
+  if (year.episodes.length > 0) {
+    parts.push(countOf(year.episodes.length, 'illness', 'illnesses'));
+  }
+  if (visits > 0) parts.push(countOf(visits, 'appointment', 'appointments'));
+  if (parts.length === 0) parts.push(countOf(year.entryCount, 'entry', 'entries'));
+  return parts.join(' · ');
+}
+
 /**
- * One thing that happened.
+ * One illness, as a card.
  *
- * Every entry is the same row — a mark, a date, a title, a line of detail —
- * whatever kind it is. The mark carries the kind, and because colour alone
- * cannot: ✓ cleared, ! started, ✕ stopped, · an appointment.
+ * The rail colour and the pill carry the state, and the pill says it in words
+ * because colour alone cannot. The bottom row is doses taken of doses
+ * prescribed — the number that says whether the course was finished, which is
+ * the whole question the app exists to ask.
+ */
+function EpisodeCard({
+  episode,
+  onOpen,
+}: {
+  episode: HistoryEpisode;
+  onOpen: (conditionId: string) => void;
+}): ReactNode {
+  const tone = EPISODE_TONES[episode.state];
+
+  return (
+    <button
+      className="card card--tap"
+      style={{ borderRadius: 18, borderLeft: `4px solid ${tone.rail}`, textAlign: 'left' }}
+      onClick={() => onOpen(episode.conditionId)}
+    >
+      <div className="spread">
+        <div style={{ minWidth: 0 }}>
+          <div style={{ font: '900 19px/1.2 var(--font)' }}>{episode.name}</div>
+          <div style={{ font: '700 13.5px/1.35 var(--font)', color: 'var(--ink-soft)', marginTop: 3 }}>
+            {episode.rangeLabel}
+            {episode.doctorName ? ` · ${episode.doctorName}` : ''}
+          </div>
+        </div>
+        <span className={`pill ${tone.pill}`}>{episode.stateLabel}</span>
+      </div>
+
+      {episode.medicationNames.length > 0 && (
+        <div style={{ font: '700 14px/1.4 var(--font)', color: 'var(--ink-soft)', marginTop: 11 }}>
+          {episode.medicationNames.join(' · ')}
+        </div>
+      )}
+
+      {episode.totalDoses === null ? (
+        episode.takenCount > 0 && (
+          <div style={{ font: '800 13px/1.3 var(--font)', color: 'var(--green)', marginTop: 10 }}>
+            {episode.takenCount} doses taken
+          </div>
+        )
+      ) : (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 10 }}>
+          <span className="bar" style={{ flex: 1, height: 7 }}>
+            <span style={{ width: `${episode.percentComplete}%`, background: tone.fill }} />
+          </span>
+          <span style={{ flex: 'none', font: '800 13px/1 var(--font)', color: tone.text }}>
+            {episode.takenCount === episode.totalDoses
+              ? `All ${episode.totalDoses}`
+              : `${episode.takenCount} of ${episode.totalDoses}`}
+          </span>
+        </div>
+      )}
+    </button>
+  );
+}
+
+const EPISODE_TONES: Record<
+  HistoryEpisode['state'],
+  { rail: string; pill: string; fill: string; text: string }
+> = {
+  in_progress: {
+    rail: 'var(--amber)',
+    pill: 'pill--amber',
+    fill: 'var(--green)',
+    text: 'var(--ink)',
+  },
+  cleared: {
+    rail: 'var(--green)',
+    pill: 'pill--green',
+    fill: 'var(--green)',
+    text: 'var(--green)',
+  },
+  stopped: { rail: 'var(--red)', pill: 'pill--red', fill: 'var(--red)', text: 'var(--red-ink)' },
+  ongoing: {
+    rail: 'var(--green)',
+    pill: 'pill--green',
+    fill: 'var(--green)',
+    text: 'var(--green)',
+  },
+};
+
+/** An illness still running, as a chip above the record. */
+function CurrentChip({
+  episode,
+  onOpen,
+}: {
+  episode: HistoryEpisode;
+  onOpen: (conditionId: string) => void;
+}): ReactNode {
+  const amber = episode.state === 'in_progress';
+  return (
+    <button
+      onClick={() => onOpen(episode.conditionId)}
+      style={{
+        flex: 1,
+        minWidth: 0,
+        textAlign: 'left',
+        borderRadius: 15,
+        padding: '11px 13px',
+        background: amber ? 'var(--amber-bg)' : 'var(--green-bg)',
+        color: amber ? 'var(--amber-ink)' : 'var(--green)',
+      }}
+    >
+      <span
+        style={{
+          display: 'block',
+          font: '900 15.5px/1.25 var(--font)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {episode.name}
+      </span>
+      <span style={{ display: 'block', marginTop: 2, font: '700 12.5px/1.3 var(--font)' }}>
+        {episode.stateLabel}
+      </span>
+    </button>
+  );
+}
+
+/**
+ * One thing that happened that belongs to no illness.
+ *
+ * The mark carries the kind, and because colour alone cannot: ✓ finished,
+ * ! started, ✕ stopped, · an appointment.
  */
 function EntryRow({
   entry,
@@ -359,9 +556,6 @@ function EntryRow({
     </>
   );
 
-  // An illness opens in full; an appointment with no illness attached opens its
-  // own note. An entry that leads nowhere stays a plain row rather than a
-  // button that does nothing when pressed.
   if (entry.conditionId) {
     const conditionId = entry.conditionId;
     return (
@@ -404,25 +598,6 @@ function describeKind(kind: HistoryEntryKind): { tone: string; mark: string } {
 /* The present                                                                */
 /* -------------------------------------------------------------------------- */
 
-function Total({
-  value,
-  label,
-  one,
-}: {
-  value: number;
-  label: string;
-  one: string;
-}): ReactNode {
-  return (
-    <div className="total">
-      <div style={{ font: '900 21px/1.1 var(--font)' }}>{value}</div>
-      <div style={{ font: '600 12.5px/1.3 var(--font)', color: 'var(--ink-soft)' }}>
-        {value === 1 ? one : label}
-      </div>
-    </div>
-  );
-}
-
 function DoseCard({
   dose,
   due,
@@ -435,19 +610,19 @@ function DoseCard({
   busy: boolean;
 }): ReactNode {
   return (
-    <div className={`card${due ? ' card--amber' : ''}`} style={{ padding: 20 }}>
+    <div className={`card${due ? ' card--amber' : ''}`} style={{ padding: 18 }}>
       <div
         className="eyebrow"
-        style={{ color: due ? 'var(--amber-ink)' : 'var(--ink-faint)', marginBottom: 13 }}
+        style={{ color: due ? 'var(--amber-ink)' : 'var(--ink-faint)', marginBottom: 12 }}
       >
         {due ? 'Take this now' : `Next, at ${dose.clockTime}`}
       </div>
 
-      <div className="row" style={{ gap: 14 }}>
-        <PillIcon tone={glyphFor(dose.medicationForm)} size={56} />
+      <div className="row" style={{ gap: 13 }}>
+        <PillIcon tone={glyphFor(dose.medicationForm)} size={48} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ font: '900 22px/1.2 var(--font)' }}>{dose.medicationName}</div>
-          <div style={{ font: '600 15.5px/1.4 var(--font)', color: 'var(--ink-soft)' }}>
+          <div style={{ font: '900 20px/1.2 var(--font)' }}>{dose.medicationName}</div>
+          <div style={{ font: '600 14.5px/1.4 var(--font)', color: 'var(--ink-soft)' }}>
             {describeUnits(dose.amount, dose.medicationForm)} at {dose.clockTime}
           </div>
         </div>
@@ -455,24 +630,48 @@ function DoseCard({
 
       <button
         className={`btn btn--primary${due ? ' btn--pulse' : ''}`}
-        style={{ marginTop: 16 }}
+        style={{ marginTop: 14 }}
         onClick={() => onOpen(dose)}
         disabled={busy}
       >
-        {due ? 'I took it ✓' : 'Take it early'}
+        I took it ✓
       </button>
     </div>
   );
 }
 
-function AllDoneCard(): ReactNode {
+/**
+ * Nothing is due, so the next dose is a line rather than a card.
+ *
+ * It was the same tall amber block as a dose that needs taking, which spends
+ * the loudest thing on the screen on "nothing to do for six hours".
+ */
+function NextDoseLine({
+  dose,
+  onOpen,
+  busy,
+}: {
+  dose: DoseView;
+  onOpen: (dose: DoseView) => void;
+  busy: boolean;
+}): ReactNode {
   return (
-    <div className="card card--green" style={{ padding: 22 }}>
-      <div style={{ font: '900 22px/1.25 var(--font)' }}>Nothing left to take today</div>
-      <div style={{ font: '600 15.5px/1.45 var(--font)', color: '#BFE0D3', marginTop: 6 }}>
-        I'll remind you when the next one is due.
-      </div>
-    </div>
+    <button className="row-card" onClick={() => onOpen(dose)} disabled={busy}>
+      <span className="dot dot--grey" aria-hidden="true">
+        ·
+      </span>
+      <span style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
+        <span style={{ display: 'block', font: '800 16px/1.3 var(--font)' }}>
+          Next: {dose.medicationName}
+        </span>
+        <span
+          style={{ display: 'block', font: '600 14px/1.35 var(--font)', color: 'var(--ink-soft)' }}
+        >
+          {describeUnits(dose.amount, dose.medicationForm)} at {dose.clockTime}
+        </span>
+      </span>
+      <span className="chev">›</span>
+    </button>
   );
 }
 

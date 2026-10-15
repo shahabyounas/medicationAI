@@ -497,10 +497,40 @@ export const HistoryMonthSchema = z.object({
 });
 export type HistoryMonth = z.infer<typeof HistoryMonthSchema>;
 
+/**
+ * One illness, as the record shows it: a card, not a run of log lines.
+ *
+ * A single appointment produces four entries of equal weight — saw the doctor,
+ * got a diagnosis, started two medicines — and a list of those is an event log.
+ * It is why a record feels long. An illness is the unit people think in, so one
+ * card carries its own visits, medicines and outcome, and the entries it is
+ * built from stay in `months` for anything that wants them.
+ */
+export const HistoryEpisodeSchema = z.object({
+  conditionId: IdSchema,
+  name: NonEmptyString,
+  /** When it opened — what it files under, and what it sorts by. */
+  occurredAt: DateSchema,
+  /** "10 October → now", "2 – 7 May". */
+  rangeLabel: NonEmptyString,
+  doctorName: z.string().nullable(),
+  state: z.enum(['in_progress', 'cleared', 'stopped', 'ongoing']),
+  /** "Day 5 of 7", "Cleared", "Stopped", "Ongoing · 5 years". */
+  stateLabel: NonEmptyString,
+  medicationNames: z.array(NonEmptyString),
+  takenCount: z.number().int().min(0),
+  /** Null for a long-term condition: there is no finish line to count to. */
+  totalDoses: z.number().int().min(0).nullable(),
+  percentComplete: z.number().min(0).max(100),
+});
+export type HistoryEpisode = z.infer<typeof HistoryEpisodeSchema>;
+
 export const HistoryYearSchema = z.object({
   year: z.number().int(),
   label: NonEmptyString,
   entryCount: z.number().int().min(0),
+  /** The illnesses that opened this year, newest first. */
+  episodes: z.array(HistoryEpisodeSchema).default([]),
   months: z.array(HistoryMonthSchema),
 });
 export type HistoryYear = z.infer<typeof HistoryYearSchema>;

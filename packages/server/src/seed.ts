@@ -141,6 +141,24 @@ async function seed(): Promise<void> {
     cautions: ['Take with food to avoid an upset stomach.'],
   });
 
+  const aciclovir = await collections.medications.insert({
+    name: 'Aciclovir',
+    strength: '800mg',
+    form: 'tablet',
+    purpose: 'Treats the shingles rash',
+    spacingRules: [],
+    cautions: ['Start within 72 hours of the rash appearing.'],
+  });
+
+  const flucloxacillin = await collections.medications.insert({
+    name: 'Flucloxacillin',
+    strength: '500mg',
+    form: 'capsule',
+    purpose: 'Clears a skin infection',
+    spacingRules: [],
+    cautions: ['Take an hour before food.'],
+  });
+
   const nitrofurantoin = await collections.medications.insert({
     name: 'Nitrofurantoin',
     strength: '100mg',
@@ -296,6 +314,121 @@ async function seed(): Promise<void> {
   const metforminStart = await startPrescription(metforminRx._id, daysAgo(30, 8));
   // She is reliable with this one — it is the antibiotic she struggles to finish.
   await settlePastDoses(metforminStart.doses, { missEvery: 9 });
+
+  // --- The years before the app -------------------------------------------
+  //
+  // A record whose claim is "your whole history" has to have some. Three
+  // closed episodes, each with the appointment that opened it and the course
+  // that treated it, plus the annual reviews that are the only thing in a
+  // quiet year. 2020 is deliberately empty: a flat year is information, and
+  // the record has to be able to show one.
+
+  for (const illness of [
+    {
+      name: 'Pneumonia',
+      plainDescription: 'An infection deep in the lungs.',
+      doctorId: drIqbal._id,
+      medicationId: amoxicillin._id,
+      medicationName: 'Amoxicillin',
+      from: dateOf(2019, 11, 6),
+      resolvedAt: dateOf(2019, 11, 27),
+      reason: 'Fever, cough and pain on breathing in for five days',
+      diagnosis: 'Community-acquired pneumonia',
+      notes:
+        'Chest X-ray confirmed consolidation at the right base. 7-day course, ' +
+        'review if not settling by day 3.',
+      timesPerDay: 3,
+      durationDays: 7,
+    },
+    {
+      name: 'Shingles',
+      plainDescription: 'A painful rash caused by the chickenpox virus waking up.',
+      doctorId: drIqbal._id,
+      medicationId: aciclovir._id,
+      medicationName: 'Aciclovir',
+      from: dateOf(2023, 6, 2),
+      resolvedAt: dateOf(2023, 6, 23),
+      reason: 'Burning pain and a blistering rash across the left ribs',
+      diagnosis: 'Shingles, left T6 dermatome',
+      notes: 'Rash two days old, within the treatment window. Warned about post-herpetic pain.',
+      timesPerDay: 5,
+      durationDays: 7,
+    },
+    {
+      name: 'Cellulitis',
+      plainDescription: 'An infection in the skin of your lower leg.',
+      doctorId: drNoor._id,
+      medicationId: flucloxacillin._id,
+      medicationName: 'Flucloxacillin',
+      from: dateOf(2025, 9, 8),
+      resolvedAt: dateOf(2025, 9, 22),
+      reason: 'Hot, red, swollen left shin after a scratch in the garden',
+      diagnosis: 'Cellulitis of the left lower leg',
+      notes: 'Margins marked in pen to track spread. Advised to keep the leg up.',
+      timesPerDay: 4,
+      durationDays: 7,
+    },
+  ]) {
+    const condition = await collections.conditions.insert({
+      patientId: patient._id,
+      name: illness.name,
+      plainDescription: illness.plainDescription,
+      status: 'resolved',
+      startedAt: illness.from,
+      resolvedAt: illness.resolvedAt,
+      originVisitId: null,
+      recurrenceOfConditionId: null,
+      isChronic: false,
+    });
+
+    const visit = await collections.visits.insert({
+      patientId: patient._id,
+      doctorId: illness.doctorId,
+      visitDate: illness.from,
+      type: 'consultation',
+      reason: illness.reason,
+      diagnosis: illness.diagnosis,
+      conditionId: condition._id,
+      notes: illness.notes,
+      followUpDate: null,
+    });
+    await collections.conditions.updateById(condition._id, { originVisitId: visit._id });
+
+    await seedHistoricCourse({
+      patientId: patient._id,
+      doctorId: illness.doctorId,
+      visitId: visit._id,
+      conditionId: condition._id,
+      medicationId: illness.medicationId,
+      medicationName: illness.medicationName,
+      issuedAt: illness.from,
+      startAt: new Date(illness.from.getTime() + 60 * 60 * 1000),
+      timesPerDay: illness.timesPerDay,
+      durationDays: illness.durationDays,
+      // Finished every one of them — the counterexample to the throat
+      // infection, and what makes that card stand out rather than look normal.
+      takenThrough: illness.timesPerDay * illness.durationDays,
+      finalStatus: 'completed',
+    });
+  }
+
+  // The quiet years: a review and nothing else, filed against the diabetes.
+  for (const review of [
+    { on: dateOf(2022, 3, 21), doctorId: drKhan._id, hba1c: '58 mmol/mol' },
+    { on: dateOf(2024, 3, 18), doctorId: drKhan._id, hba1c: '54 mmol/mol' },
+  ]) {
+    await collections.visits.insert({
+      patientId: patient._id,
+      doctorId: review.doctorId,
+      visitDate: review.on,
+      type: 'routine_check',
+      reason: 'Annual diabetes review',
+      diagnosis: 'Type 2 diabetes — stable',
+      conditionId: diabetes._id,
+      notes: `HbA1c ${review.hba1c}. Feet and eyes checked, no change to treatment.`,
+      followUpDate: null,
+    });
+  }
 
   // --- The live course: chest infection, day 4 of 7 ------------------------
 
