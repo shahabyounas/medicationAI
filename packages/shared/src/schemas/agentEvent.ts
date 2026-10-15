@@ -24,6 +24,18 @@ export const AgentEventTypeSchema = z.enum([
   'refill_warning',
   'adherence_note',
   'recurrence_detected',
+  'side_effect_reported',
+  'chasing_paused',
+  'chasing_resumed',
+  'appointment_booked',
+  'appointment_reminder',
+  'appointment_missed',
+  'reading_recorded',
+  'symptom_recorded',
+  'refill_collected',
+  'self_care_started',
+  'self_care_stopped',
+  'allergy_flagged',
 ]);
 export type AgentEventType = z.infer<typeof AgentEventTypeSchema>;
 

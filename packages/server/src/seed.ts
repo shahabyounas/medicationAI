@@ -9,6 +9,9 @@ import { ensureIndexes } from './db/indexes.js';
 import { collections } from './db/collections.js';
 import { createPrescription, startPrescription } from './services/prescriptionService.js';
 import { logAgentEvent } from './services/agentEventService.js';
+import { addSelfCare } from './services/selfCareService.js';
+import { createAppointment } from './services/appointmentService.js';
+import { recordImmunisation, recordLabResult } from './services/recordItemsService.js';
 
 /**
  * Seeds the scenario from the design document.
@@ -38,6 +41,13 @@ function dateOf(year: number, month: number, day: number, hour = 9): Date {
   return new Date(Date.UTC(year, month - 1, day, hour, 0, 0));
 }
 
+/** A date this many days ahead, at a sensible wall-clock time. */
+function daysAhead(days: number, hour = 9, minute = 0): Date {
+  const date = new Date(Date.now() + days * DAY_MS);
+  date.setHours(hour, minute, 0, 0);
+  return date;
+}
+
 async function seed(): Promise<void> {
   await connectToDatabase();
   await ensureIndexes();
@@ -50,7 +60,27 @@ async function seed(): Promise<void> {
     phone: '+447700900123',
     dateOfBirth: dateOf(1954, 3, 17),
     timezone: TZ,
+    heightCm: 163,
     mealtimes: DEFAULT_MEALTIMES,
+    // On the record before any medicine is accepted. The name check at intake
+    // has nothing to check against otherwise, and "we never asked" is the
+    // reason an app hands somebody a medicine they have reacted to before.
+    allergies: [
+      {
+        id: randomUUID(),
+        substance: 'Penicillin',
+        reaction: 'Rash across the arms and chest, 2019',
+        severity: 'severe',
+        recordedAt: dateOf(2019, 4, 2),
+      },
+      {
+        id: randomUUID(),
+        substance: 'Codeine',
+        reaction: 'Made him very sick',
+        severity: 'mild',
+        recordedAt: dateOf(2021, 11, 14),
+      },
+    ],
     familyContacts: [
       {
         id: randomUUID(),
@@ -107,6 +137,7 @@ async function seed(): Promise<void> {
     strength: '500mg',
     form: 'capsule',
     purpose: 'Clears the infection in your chest',
+    kind: 'prescription',
     spacingRules: [
       {
         otherMedicationName: 'Pantoprazole',
@@ -122,6 +153,7 @@ async function seed(): Promise<void> {
     strength: '40mg',
     form: 'tablet',
     purpose: 'Protects your stomach from the antibiotic',
+    kind: 'prescription',
     spacingRules: [
       {
         otherMedicationName: 'Amoxicillin',
@@ -137,6 +169,7 @@ async function seed(): Promise<void> {
     strength: '500mg',
     form: 'tablet',
     purpose: 'Keeps your blood sugar steady',
+    kind: 'prescription',
     spacingRules: [],
     cautions: ['Take with food to avoid an upset stomach.'],
   });
@@ -146,6 +179,7 @@ async function seed(): Promise<void> {
     strength: '800mg',
     form: 'tablet',
     purpose: 'Treats the shingles rash',
+    kind: 'prescription',
     spacingRules: [],
     cautions: ['Start within 72 hours of the rash appearing.'],
   });
@@ -155,6 +189,7 @@ async function seed(): Promise<void> {
     strength: '500mg',
     form: 'capsule',
     purpose: 'Clears a skin infection',
+    kind: 'prescription',
     spacingRules: [],
     cautions: ['Take an hour before food.'],
   });
@@ -164,6 +199,7 @@ async function seed(): Promise<void> {
     strength: '100mg',
     form: 'capsule',
     purpose: 'Clears a urine infection',
+    kind: 'prescription',
     spacingRules: [],
     cautions: [],
   });
@@ -173,6 +209,7 @@ async function seed(): Promise<void> {
     strength: '250mg',
     form: 'tablet',
     purpose: 'Clears a throat infection',
+    kind: 'prescription',
     spacingRules: [],
     cautions: [],
   });
@@ -245,7 +282,7 @@ async function seed(): Promise<void> {
     conditionId: urine._id,
     notes: 'Dipstick positive for nitrites. 5-day course. Advised to drink plenty of water.',
     followUpDate: null,
-    vitals: { temperatureC: 37.2, bloodPressure: '138/82' },
+    vitals: { temperatureC: 37.2, bloodPressureSystolic: 138, bloodPressureDiastolic: 82 },
   });
   await collections.conditions.updateById(urine._id, { originVisitId: urineVisit._id });
 
@@ -288,7 +325,7 @@ async function seed(): Promise<void> {
     conditionId: diabetes._id,
     notes: 'HbA1c 51 mmol/mol. Continue Metformin at current dose. Review in six months.',
     followUpDate: new Date(Date.now() + 142 * DAY_MS),
-    vitals: { bloodPressure: '132/78', weightKg: 71.4, pulseBpm: 74 },
+    vitals: { bloodPressureSystolic: 132, bloodPressureDiastolic: 78, weightKg: 71.4, pulseBpm: 74 },
   });
   await collections.conditions.updateById(diabetes._id, { originVisitId: diabetesVisit._id });
 
@@ -456,7 +493,7 @@ async function seed(): Promise<void> {
       'Crackles at the right base. 7-day course of amoxicillin with pantoprazole cover. ' +
       'Patient stopped an earlier antibiotic course early — reinforced the importance of finishing.',
     followUpDate: new Date(Date.now() + 4 * DAY_MS),
-    vitals: { temperatureC: 38.4, bloodPressure: '141/86', pulseBpm: 96 },
+    vitals: { temperatureC: 38.4, bloodPressureSystolic: 141, bloodPressureDiastolic: 86, pulseBpm: 96 },
   });
   await collections.conditions.updateById(chest._id, { originVisitId: chestVisit._id });
 
@@ -511,6 +548,255 @@ async function seed(): Promise<void> {
     message: null,
     escalationNodeId: null,
     visibleToFamily: true,
+  });
+
+  /* ======================================================================== */
+  /* The outcome side of the record                                           */
+  /* ======================================================================== */
+
+  // --- What he takes without anybody prescribing it ------------------------
+  //
+  // The list a clinician actually asks for, and the part no prescription knows
+  // about: a vitamin D he has taken for years and ibuprofen in the drawer.
+
+  const vitaminD = await collections.medications.insert({
+    name: 'Vitamin D 1000 IU',
+    strength: '1000 IU',
+    form: 'tablet',
+    kind: 'supplement',
+    purpose: 'Keeps his vitamin D up through the winter',
+    spacingRules: [],
+    cautions: [],
+  });
+
+  const ibuprofen = await collections.medications.insert({
+    name: 'Ibuprofen',
+    strength: '400mg',
+    form: 'tablet',
+    kind: 'over_the_counter',
+    purpose: 'For his knee when it plays up',
+    spacingRules: [],
+    cautions: ['Take with food'],
+  });
+
+  await addSelfCare(
+    {
+      patientId: patient._id,
+      medication: { existingId: vitaminD._id },
+      amountPerDose: 1,
+      timesPerDay: 1,
+      foodRule: 'with_food',
+      durationDays: null,
+      conditionId: null,
+      // On, because this is the one he actually wants nudging about.
+      remindMe: true,
+      unitsInHand: 40,
+      startedAt: daysAgo(120),
+    },
+    daysAgo(120),
+  );
+
+  await addSelfCare(
+    {
+      patientId: patient._id,
+      medication: { existingId: ibuprofen._id },
+      amountPerDose: 1,
+      timesPerDay: 2,
+      foodRule: 'after_food',
+      durationDays: null,
+      conditionId: null,
+      // Off: nobody wants an escalating ladder over a painkiller they take
+      // when their knee hurts. It is a list entry, not a plan.
+      remindMe: false,
+      unitsInHand: 12,
+      startedAt: daysAgo(60),
+    },
+    daysAgo(60),
+  );
+
+  // --- Readings: four months of blood pressure and weight ------------------
+  //
+  // Enough points to be a line rather than a scatter, with the wobble a real
+  // home monitor produces. The diabetes is what makes these worth keeping.
+
+  for (let week = 16; week >= 0; week -= 1) {
+    const wobble = Math.sin(week * 1.1);
+    await collections.readings.insert({
+      patientId: patient._id,
+      metric: 'blood_pressure',
+      takenAt: daysAgo(week * 7, 8),
+      value: Math.round(138 + wobble * 6 - (16 - week) * 0.35),
+      secondValue: Math.round(84 + wobble * 4 - (16 - week) * 0.2),
+      source: 'patient',
+      visitId: null,
+      conditionId: diabetes._id,
+      note: week === 16 ? 'First one, sitting down after breakfast' : null,
+    });
+
+    if (week % 2 === 0) {
+      await collections.readings.insert({
+        patientId: patient._id,
+        metric: 'weight',
+        takenAt: daysAgo(week * 7, 8),
+        value: Number((73.8 - (16 - week) * 0.15 + wobble * 0.3).toFixed(1)),
+        secondValue: null,
+        source: 'patient',
+        visitId: null,
+        conditionId: diabetes._id,
+        note: null,
+      });
+    }
+  }
+
+  // Blood sugar, taken more often because the nurse asked him to.
+  for (let day = 21; day >= 0; day -= 1) {
+    await collections.readings.insert({
+      patientId: patient._id,
+      metric: 'blood_glucose',
+      takenAt: daysAgo(day, 7),
+      value: Number((6.4 + Math.sin(day * 0.7) * 0.9).toFixed(1)),
+      secondValue: null,
+      source: 'patient',
+      visitId: null,
+      conditionId: diabetes._id,
+      note: null,
+    });
+  }
+
+  // --- How he says he feels, day by day, on the live course ----------------
+  //
+  // The point of the whole severity series: he is nearly back to normal by
+  // day 3, which is exactly where the missed doses start.
+
+  for (const [index, severity] of [7, 6, 4, 2].entries()) {
+    await collections.symptoms.insert({
+      patientId: patient._id,
+      conditionId: chest._id,
+      recordedAt: daysAgo(3 - index, 20),
+      severity,
+      note: index === 3 ? 'Cough much looser, slept through' : null,
+    });
+  }
+
+  // --- A side effect, reported and still open ------------------------------
+  //
+  // Mild, so the reminders carry on — which is the branch worth seeding,
+  // because the severe branch would leave the live course paused and the home
+  // screen with nothing due.
+
+  await collections.sideEffects.insert({
+    patientId: patient._id,
+    courseId: started.courses[0]?._id ?? null,
+    medicationName: 'Amoxicillin',
+    conditionId: chest._id,
+    symptom: 'Upset stomach',
+    severity: 'mild',
+    startedAt: daysAgo(2, 12),
+    reportedAt: daysAgo(2, 13),
+    stoppedTaking: false,
+    doctorInformedAt: null,
+    resolvedAt: null,
+    notes: 'Comes on about an hour after the tablet.',
+  });
+
+  // --- The follow-up, as a real appointment --------------------------------
+  //
+  // The visit above has carried a `followUpDate` since the first version of
+  // this seed and nothing has ever reminded him about it.
+
+  await createAppointment(
+    {
+      patientId: patient._id,
+      doctorId: drIqbal._id,
+      withWhom: 'Dr. Farhan Iqbal',
+      conditionId: chest._id,
+      scheduledFor: daysAhead(4, 10, 20),
+      type: 'follow_up',
+      location: 'Ashworth Road Surgery',
+      notes: 'Ask whether the cough still being there on day 7 matters.',
+    },
+    new Date(),
+  );
+
+  await createAppointment(
+    {
+      patientId: patient._id,
+      doctorId: drKhan._id,
+      withWhom: 'Dr. Ayesha Khan',
+      conditionId: diabetes._id,
+      scheduledFor: daysAhead(38, 9, 40),
+      type: 'routine_check',
+      location: 'Didsbury Diabetes Clinic',
+      notes: 'Annual review. Bring the blood sugar readings.',
+    },
+    new Date(),
+  );
+
+  // --- Results: the HbA1c series the reviews mention but never recorded ----
+
+  for (const panel of [
+    { on: dateOf(2022, 3, 21), hba1c: 58, weight: 76.2 },
+    { on: dateOf(2024, 3, 18), hba1c: 54, weight: 74.8 },
+    { on: daysAgo(96), hba1c: 51, weight: 73.4 },
+  ]) {
+    await recordLabResult({
+      patientId: patient._id,
+      panelName: 'Diabetes review bloods',
+      takenAt: panel.on,
+      doctorId: drKhan._id,
+      conditionId: diabetes._id,
+      notes: 'Dr. Khan was happy with it.',
+      items: [
+        {
+          name: 'HbA1c',
+          value: String(panel.hba1c),
+          unit: 'mmol/mol',
+          referenceRange: '20–41',
+          flag: 'high',
+        },
+        {
+          name: 'eGFR',
+          value: '78',
+          unit: 'mL/min',
+          referenceRange: '>90',
+          flag: 'low',
+        },
+        { name: 'Cholesterol', value: '4.6', unit: 'mmol/L', referenceRange: '<5.0', flag: 'normal' },
+      ],
+    });
+  }
+
+  // --- Jabs, including one that is due ------------------------------------
+
+  await recordImmunisation({
+    patientId: patient._id,
+    name: 'Flu',
+    givenAt: dateOf(2025, 10, 9),
+    doseLabel: 'Annual',
+    site: 'Left arm',
+    administeredBy: 'Ashworth Road Surgery',
+    // Last October's jab, so this year's is already due.
+    nextDueAt: dateOf(2026, 10, 9),
+  });
+
+  await recordImmunisation({
+    patientId: patient._id,
+    name: 'Pneumococcal',
+    givenAt: dateOf(2019, 6, 11),
+    doseLabel: 'One-off',
+    site: 'Right arm',
+    administeredBy: 'Ashworth Road Surgery',
+    nextDueAt: null,
+  });
+
+  await recordImmunisation({
+    patientId: patient._id,
+    name: 'Covid-19',
+    givenAt: dateOf(2025, 11, 2),
+    doseLabel: 'Autumn booster',
+    site: 'Left arm',
+    administeredBy: 'Boots, Fallowfield',
+    nextDueAt: null,
   });
 
   const counts = await Promise.all(

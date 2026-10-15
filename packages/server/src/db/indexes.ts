@@ -33,5 +33,19 @@ export async function ensureIndexes(): Promise<void> {
     // One row per browser install; re-subscribing must update, not duplicate.
     db.collection('push_subscriptions').createIndex({ endpoint: 1 }, { unique: true }),
     db.collection('push_subscriptions').createIndex({ patientId: 1 }),
+    // A reading is only ever read as a series: one metric, in time order.
+    db.collection('readings').createIndex({ patientId: 1, metric: 1, takenAt: -1 }),
+    db.collection('side_effects').createIndex({ patientId: 1, reportedAt: -1 }),
+    db.collection('side_effects').createIndex({ courseId: 1 }),
+    // One entry per condition per day, which is also what makes the one-tap
+    // prompt idempotent: asking twice must not produce two rows.
+    db.collection('symptom_entries').createIndex({ patientId: 1, conditionId: 1, recordedAt: -1 }),
+    // The appointment reminder's hot path, mirroring escalation_states.nextRunAt.
+    db.collection('appointments').createIndex({ status: 1, scheduledFor: 1 }),
+    db.collection('appointments').createIndex({ patientId: 1, scheduledFor: -1 }),
+    db.collection('appointments').createIndex({ originVisitId: 1 }),
+    db.collection('lab_results').createIndex({ patientId: 1, takenAt: -1 }),
+    db.collection('immunisations').createIndex({ patientId: 1, givenAt: -1 }),
+    db.collection('health_documents').createIndex({ patientId: 1, capturedAt: -1 }),
   ]);
 }

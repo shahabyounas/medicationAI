@@ -40,10 +40,18 @@ export const VisitSchema = TimestampsSchema.extend({
   conditionId: IdSchema.nullable().default(null),
   notes: z.string().trim().max(4000).optional(),
   followUpDate: DateSchema.nullable().default(null),
-  /** Free-text vitals as written on the notes — never interpreted by the agent. */
+  /**
+   * The numbers taken at the appointment — never interpreted by the agent.
+   *
+   * Blood pressure is two numbers rather than the string "138/82" it used to
+   * be, because a reading that cannot be split cannot be plotted: the nurse's
+   * measurements and the patient's own home readings are the same series, and
+   * one of them being text meant the series could not exist.
+   */
   vitals: z
     .object({
-      bloodPressure: z.string().trim().max(20).optional(),
+      bloodPressureSystolic: z.number().int().min(40).max(260).optional(),
+      bloodPressureDiastolic: z.number().int().min(20).max(200).optional(),
       temperatureC: z.number().min(25).max(45).optional(),
       pulseBpm: z.number().int().min(20).max(250).optional(),
       weightKg: z.number().min(1).max(400).optional(),
@@ -74,3 +82,11 @@ export const VisitDetailSchema = VisitSchema.extend({
   medicationNames: z.array(NonEmptyString),
 });
 export type VisitDetail = z.infer<typeof VisitDetailSchema>;
+
+/** "138/82" — the pair as a person says it, or null when only one was taken. */
+export function describeBloodPressure(vitals: Visit['vitals']): string | null {
+  const systolic = vitals?.bloodPressureSystolic;
+  const diastolic = vitals?.bloodPressureDiastolic;
+  if (systolic === undefined || diastolic === undefined) return null;
+  return `${systolic}/${diastolic}`;
+}

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { describeBloodPressure } from '@medication-ai/shared';
 import {
   VISIT_TYPE_LABELS,
   describeUnits,
@@ -220,7 +221,10 @@ export function VisitOverlay({
   const vitals = visit.vitals;
   const hasVitals =
     vitals &&
-    (vitals.bloodPressure || vitals.temperatureC || vitals.pulseBpm || vitals.weightKg);
+    (vitals.bloodPressureSystolic ||
+      vitals.temperatureC ||
+      vitals.pulseBpm ||
+      vitals.weightKg);
 
   return (
     <div className="overlay overlay--light">
@@ -283,7 +287,9 @@ export function VisitOverlay({
               Recorded that day
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18 }}>
-              {vitals.bloodPressure && <Vital label="Blood pressure" value={vitals.bloodPressure} />}
+              {describeBloodPressure(vitals) && (
+                <Vital label="Blood pressure" value={describeBloodPressure(vitals)!} />
+              )}
               {vitals.temperatureC !== undefined && (
                 <Vital label="Temperature" value={`${vitals.temperatureC}°C`} />
               )}

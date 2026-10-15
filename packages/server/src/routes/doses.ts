@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   DoseActionResponseSchema,
   DoseSchema,
+  SkipDoseRequestSchema,
   SnoozeDoseRequestSchema,
   TakeDoseRequestSchema,
 } from '@medication-ai/shared';
@@ -52,7 +53,8 @@ dosesRouter.post(
 dosesRouter.post(
   '/:doseId/skip',
   asyncHandler(async (req, res) => {
-    const result = await skipDose(pathParam(req, 'doseId'));
+    const body = parseBody(SkipDoseRequestSchema, req.body ?? {});
+    const result = await skipDose(pathParam(req, 'doseId'), body.reason);
     res.json(DoseActionResponseSchema.parse(result));
   }),
 );

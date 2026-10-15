@@ -18,7 +18,7 @@
     "dev:web": "npm run dev -w @medication-ai/web",
     "build": "npm run build -w @medication-ai/server && npm run build -w @medication-ai/web",
     "typecheck": "npm run typecheck -w @medication-ai/shared && npm run typecheck -w @medication-ai/server && npm run typecheck -w @medication-ai/web && tsc --noEmit -p tsconfig.json",
-    "test": "npm run test -w @medication-ai/shared && npm run test -w @medication-ai/server",
+    "test": "npm run test -w @medication-ai/shared && npm run test -w @medication-ai/server && npm run test -w @medication-ai/web",
     "seed": "npm run seed -w @medication-ai/server",
     "vapid": "npm run vapid -w @medication-ai/server",
     "mongo:up": "docker compose up -d mongo",

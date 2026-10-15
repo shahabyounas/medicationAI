@@ -40,6 +40,33 @@ export function describeUnits(amount: number, form: MedicationForm): string {
 }
 
 /**
+ * Where a medicine came from, which is not always a doctor.
+ *
+ * Most of what people actually take is not on a prescription: the vitamin D
+ * every morning, the ibuprofen in the drawer, the cod liver oil somebody's
+ * daughter swears by. An app that only knows about prescribed medicine has an
+ * incomplete list of what is going into the patient — which matters most at the
+ * exact moment the list is needed, when a clinician asks what they are on.
+ *
+ * The distinction is kept because the app's behaviour differs: a prescription
+ * is read back and cannot be edited, while something bought off a shelf has no
+ * paper behind it, no doctor to attribute it to, and can be stopped by the
+ * patient whenever they like without that being a course abandoned.
+ */
+export const MedicationKindSchema = z.enum([
+  'prescription',
+  'over_the_counter',
+  'supplement',
+]);
+export type MedicationKind = z.infer<typeof MedicationKindSchema>;
+
+export const MEDICATION_KIND_LABELS: Record<MedicationKind, string> = {
+  prescription: 'Prescribed',
+  over_the_counter: 'Off the shelf',
+  supplement: 'Supplement',
+};
+
+/**
  * A medicine in the catalogue.
  *
  * `purpose` is the sentence shown to the patient — "Clears the infection in
@@ -51,6 +78,7 @@ export const MedicationSchema = TimestampsSchema.extend({
   name: NonEmptyString.max(160),
   strength: z.string().trim().max(40).optional(),
   form: MedicationFormSchema.default('tablet'),
+  kind: MedicationKindSchema.default('prescription'),
   purpose: z.string().trim().max(300).optional(),
   /**
    * Minimum minutes this medicine must be separated from another named

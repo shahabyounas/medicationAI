@@ -55,6 +55,42 @@ export const FamilyContactSchema = z.object({
 });
 export type FamilyContact = z.infer<typeof FamilyContactSchema>;
 
+export const AllergySeveritySchema = z.enum(['mild', 'severe', 'life_threatening']);
+export type AllergySeverity = z.infer<typeof AllergySeveritySchema>;
+
+export const ALLERGY_SEVERITY_LABELS: Record<AllergySeverity, string> = {
+  mild: 'Mild reaction',
+  severe: 'Severe reaction',
+  life_threatening: 'Life-threatening',
+};
+
+/**
+ * Something the patient has reacted to before.
+ *
+ * The one record in the app that has to be in front of somebody *before* a
+ * medicine is accepted rather than after. Without it the intake form will take
+ * penicillin for a patient who has reacted to penicillin and say nothing, which
+ * is the worst thing a medicines app can quietly do.
+ *
+ * What the agent does with it stays inside the guardrail: it matches the name
+ * it has been given against the names it was given before and repeats what the
+ * patient told it. It does not know what penicillin is, it does not know that
+ * amoxicillin is one, and it never says whether a medicine is safe. The
+ * sentence it can say is "you have a severe reaction to this on your record —
+ * check it with the person who prescribed it", which is a fact plus an
+ * instruction to ask a human.
+ */
+export const AllergySchema = z.object({
+  id: IdSchema,
+  /** "Penicillin", "Peanuts", "Latex" — as the patient says it. */
+  substance: NonEmptyString.max(160),
+  /** What happened. Free text, never interpreted. */
+  reaction: z.string().trim().max(300).optional(),
+  severity: AllergySeveritySchema.default('mild'),
+  recordedAt: DateSchema,
+});
+export type Allergy = z.infer<typeof AllergySchema>;
+
 export const PatientSchema = TimestampsSchema.extend({
   _id: IdSchema,
   name: NonEmptyString.max(120),
@@ -64,6 +100,10 @@ export const PatientSchema = TimestampsSchema.extend({
   timezone: NonEmptyString.default('Europe/London'),
   mealtimes: MealtimesSchema,
   familyContacts: z.array(FamilyContactSchema).max(3).default([]),
+  /** Checked by name whenever a new medicine is added. See `AllergySchema`. */
+  allergies: z.array(AllergySchema).max(40).default([]),
+  /** Only ever used to give a weight chart something to be a share of. */
+  heightCm: z.number().min(50).max(250).optional(),
 });
 export type Patient = z.infer<typeof PatientSchema>;
 
@@ -74,6 +114,7 @@ export const CreatePatientSchema = PatientSchema.omit({
 }).extend({
   mealtimes: MealtimesSchema.default(DEFAULT_MEALTIMES),
   familyContacts: z.array(FamilyContactSchema.omit({ id: true })).max(3).default([]),
+  allergies: z.array(AllergySchema.omit({ id: true })).max(40).default([]),
 });
 export type CreatePatient = z.infer<typeof CreatePatientSchema>;
 

@@ -108,6 +108,8 @@ export interface BuildCourseProgressInput {
   doses: readonly Dose[];
   timeZone: string;
   now?: Date;
+  /** True while a reported side effect has the reminders paused. */
+  paused?: boolean;
 }
 
 export function buildCourseProgress(input: BuildCourseProgressInput): CourseProgress {
@@ -129,6 +131,7 @@ export function buildCourseProgress(input: BuildCourseProgressInput): CourseProg
       ? Math.max(1, calendarDaysBetween(input.startedAt, now, input.timeZone) + 1)
       : null,
     unitsRemaining: input.unitsRemaining,
+    paused: input.paused ?? false,
   };
 }
 

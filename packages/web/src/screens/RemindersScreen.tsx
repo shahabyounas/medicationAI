@@ -26,6 +26,9 @@ export function RemindersScreen({
   onOpenReport,
   reportAvailable,
   busy,
+  onOpenProfile,
+  onShare,
+  allergyCount,
 }: {
   family: FamilyResponse;
   patientId: string;
@@ -33,6 +36,10 @@ export function RemindersScreen({
   onOpenReport: () => void;
   reportAvailable: boolean;
   busy: boolean;
+  onOpenProfile: () => void;
+  onShare: () => void;
+  /** Unused for display; kept so the caller's intent stays explicit. */
+  allergyCount?: number;
 }): ReactNode {
   return (
     <div className="pad">
@@ -160,6 +167,50 @@ export function RemindersScreen({
           See the course report
         </button>
       )}
+
+      {/*
+        Your details, and the two things that had nowhere to live.
+        The allergy list is checked before every new medicine is accepted, and
+        the family contact is the ladder's last rung — which no screen in the
+        app could edit until now.
+      */}
+      <button className="row-card" style={{ marginTop: 14 }} onClick={onOpenProfile}>
+        <span style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
+          <span style={{ display: 'block', font: '900 17px/1.25 var(--font)' }}>You</span>
+          <span
+            style={{
+              display: 'block',
+              font: '600 14.5px/1.35 var(--font)',
+              color: 'var(--ink-soft)',
+            }}
+          >
+            Your details, what you react to, and who I fall back on
+          </span>
+        </span>
+        <span className="chev" aria-hidden="true">
+          ›
+        </span>
+      </button>
+
+      <button className="row-card" style={{ marginTop: 10 }} onClick={onShare}>
+        <span style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
+          <span style={{ display: 'block', font: '900 17px/1.25 var(--font)' }}>
+            Show this to a doctor
+          </span>
+          <span
+            style={{
+              display: 'block',
+              font: '600 14.5px/1.35 var(--font)',
+              color: 'var(--ink-soft)',
+            }}
+          >
+            Your whole record on one page you can print
+          </span>
+        </span>
+        <span className="chev" aria-hidden="true">
+          ›
+        </span>
+      </button>
     </div>
   );
 }

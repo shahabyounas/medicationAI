@@ -59,6 +59,7 @@ export async function createScenario(
     phone: '+447700900123',
     timezone: overrides.timezone ?? 'Europe/London',
     mealtimes: DEFAULT_MEALTIMES,
+    allergies: [],
     familyContacts: withFamily
       ? [
           {
@@ -85,6 +86,7 @@ export async function createScenario(
     strength: '500mg',
     form: 'tablet',
     purpose: 'Clears the infection in your chest',
+    kind: 'prescription',
     spacingRules: [],
     cautions: [],
   });

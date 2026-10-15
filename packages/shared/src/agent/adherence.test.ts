@@ -27,6 +27,7 @@ function dose(status: DoseStatus, scheduledAt: string): Dose {
     amount: 1,
     confirmedVia: null,
     rescheduledReason: null,
+  skipReason: null,
     createdAt: at,
     updatedAt: at,
   };

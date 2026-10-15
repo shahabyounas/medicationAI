@@ -344,6 +344,7 @@ describe('open-ended courses', () => {
       strength: '500mg',
       form: 'tablet',
       purpose: 'Keeps your blood sugar steady',
+      kind: 'prescription',
       spacingRules: [],
       cautions: [],
     });

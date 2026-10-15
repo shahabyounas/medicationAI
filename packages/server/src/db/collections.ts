@@ -1,5 +1,12 @@
 import {
   AgentEventSchema,
+  AppointmentSchema,
+  HealthDocumentSchema,
+  ImmunisationSchema,
+  LabResultSchema,
+  ReadingSchema,
+  SideEffectReportSchema,
+  SymptomEntrySchema,
   ConditionSchema,
   CourseSchema,
   DoctorSchema,
@@ -11,6 +18,13 @@ import {
   PushSubscriptionSchema,
   VisitSchema,
   type AgentEvent,
+  type Appointment,
+  type HealthDocument,
+  type Immunisation,
+  type LabResult,
+  type Reading,
+  type SideEffectReport,
+  type SymptomEntry,
   type Condition,
   type Course,
   type Doctor,
@@ -42,6 +56,15 @@ export const collections = {
     'push_subscriptions',
     PushSubscriptionSchema,
   ),
+  // The outcome side of the record: what the patient measured, reported and
+  // was given, as distinct from what a doctor wrote and what they swallowed.
+  readings: new Repository<Reading>('readings', ReadingSchema),
+  sideEffects: new Repository<SideEffectReport>('side_effects', SideEffectReportSchema),
+  symptoms: new Repository<SymptomEntry>('symptom_entries', SymptomEntrySchema),
+  appointments: new Repository<Appointment>('appointments', AppointmentSchema),
+  labResults: new Repository<LabResult>('lab_results', LabResultSchema),
+  immunisations: new Repository<Immunisation>('immunisations', ImmunisationSchema),
+  documents: new Repository<HealthDocument>('health_documents', HealthDocumentSchema),
 } as const;
 
 export type Collections = typeof collections;

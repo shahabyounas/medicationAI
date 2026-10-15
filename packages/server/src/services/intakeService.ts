@@ -7,6 +7,7 @@ import {
 } from '@medication-ai/shared';
 import { collections } from '../db/collections.js';
 import { BadRequestError } from '../http/errors.js';
+import { flagAllergies } from './selfCareService.js';
 import { createPrescription } from './prescriptionService.js';
 import { detectRecurrence } from './recordService.js';
 import { logAgentEvent } from './agentEventService.js';
@@ -158,6 +159,7 @@ export async function recordIntake(input: IntakeRequest): Promise<IntakeResponse
           ...(create.strength ? { strength: create.strength } : {}),
           form: create.form,
           ...(create.purpose ? { purpose: create.purpose } : {}),
+          kind: 'prescription',
           spacingRules: [],
           cautions: [],
         });
@@ -192,6 +194,38 @@ export async function recordIntake(input: IntakeRequest): Promise<IntakeResponse
     items,
   });
 
+  /**
+   * The allergy check, after the medicines are known and before anything is
+   * taken.
+   *
+   * Deliberately not a refusal. The app matches a name against a name — it does
+   * not know what amoxicillin contains and would be wrong to block a
+   * prescription a doctor has written on the strength of a substring. So it
+   * raises the fact, in front of the patient, before the read-back's "yes, I
+   * have it" starts the clock. Saying nothing was the actual bug: the form would
+   * take penicillin for a patient whose own record says penicillin gave them a
+   * rash.
+   */
+  const allergyFlags = [
+    ...new Set(items.flatMap((item) => flagAllergies(patient, item.medicationName))),
+  ];
+
+  if (allergyFlags.length > 0) {
+    await logAgentEvent({
+      patientId: patient._id,
+      type: 'allergy_flagged',
+      occurredAt: new Date(),
+      doseId: null,
+      courseId: null,
+      conditionId,
+      channel: 'internal',
+      summary: `Checked this prescription against your allergy list — ${allergyFlags.length} to look at before you start`,
+      message: allergyFlags.join(' '),
+      escalationNodeId: null,
+      visibleToFamily: true,
+    });
+  }
+
   if (recurrenceNote && conditionId) {
     await logAgentEvent({
       patientId: patient._id,
@@ -215,6 +249,7 @@ export async function recordIntake(input: IntakeRequest): Promise<IntakeResponse
     conditionId,
     doctorWasCreated,
     medicationsCreated,
+    allergyFlags,
   };
 }
 

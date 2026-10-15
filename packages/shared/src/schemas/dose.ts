@@ -67,6 +67,14 @@ export const DoseSchema = TimestampsSchema.extend({
   confirmedVia: z.enum(['app', 'sms', 'whatsapp', 'family', 'auto']).nullable().default(null),
   /** Set when a replan moved this dose, for the activity log. */
   rescheduledReason: z.string().trim().max(300).nullable().default(null),
+  /**
+   * Why the patient chose not to take it.
+   *
+   * A skip used to record nothing but the fact, so the record could not tell a
+   * patient who felt better from one the medicine was making ill — and the
+   * agent, which escalates identically either way, had nothing to go on.
+   */
+  skipReason: z.string().trim().max(300).nullable().default(null),
 });
 export type Dose = z.infer<typeof DoseSchema>;
 
