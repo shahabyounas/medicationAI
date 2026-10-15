@@ -10,6 +10,7 @@ import {
   type Condition,
   type ConditionHistory,
   type ConditionMedicationHistory,
+  type ConditionProgress,
   type Course,
   type Dose,
   type DoseLogEntry,
@@ -481,6 +482,8 @@ export async function buildConditionHistory(
 
   const forms = await medicationFormsByCourse(courses);
   const medications: ConditionMedicationHistory[] = [];
+  // The doses of courses that have an end, which are the ones the band counts.
+  const finiteDoses: Dose[] = [];
 
   for (const course of courses) {
     const form: MedicationForm = forms.get(course._id) ?? 'tablet';
@@ -489,6 +492,8 @@ export async function buildConditionHistory(
       { courseId: course._id },
       { sort: { scheduledAt: -1 } },
     );
+
+    if (course.totalDoses !== null) finiteDoses.push(...doses);
 
     medications.push({
       courseId: course._id,
@@ -518,10 +523,60 @@ export async function buildConditionHistory(
     resolvedAt: condition.resolvedAt,
     durationLabel: durationLabelFor(condition, now, tz),
     doctorNames: [...new Set(visits.map((visit) => visit.doctorName))],
+    progress: buildConditionProgress(courses, finiteDoses, now, tz),
     visits,
     medications,
     recurrenceOfConditionId: condition.recurrenceOfConditionId,
     recurrenceNote: await recurrenceNoteFor(condition, tz),
+  };
+}
+
+/**
+ * Where the treatment has got to, for the band above an open illness.
+ *
+ * Counts doses that were actually due by now as well as the course total: "8 of
+ * 21" on day five reads as being badly behind, when thirteen of those were
+ * never due yet. Both numbers together are what make five unrecorded doses
+ * visible without overstating them.
+ */
+function buildConditionProgress(
+  courses: readonly Course[],
+  doses: readonly Dose[],
+  now: Date,
+  timeZone: string,
+): ConditionProgress | null {
+  const finite = courses.filter((course) => course.totalDoses !== null);
+  if (finite.length === 0) return null;
+
+  const totalDoses = finite.reduce((sum, course) => sum + (course.totalDoses ?? 0), 0);
+  const takenCount = doses.filter((dose) => isTaken(dose.status)).length;
+  const dueByNow = doses.filter((dose) => dose.scheduledAt.getTime() <= now.getTime()).length;
+
+  const lastDose = doses.reduce<Date | null>(
+    (latest, dose) =>
+      latest === null || dose.scheduledAt > latest ? dose.scheduledAt : latest,
+    null,
+  );
+
+  let dayLabel: string | null = null;
+  for (const course of finite) {
+    const { startedAt, durationDays } = course;
+    if (!startedAt || durationDays === null) continue;
+    const day = Math.max(1, calendarDaysBetween(startedAt, now, timeZone) + 1);
+    // Past the last day the course is over, and "Day 9 of 7" is nonsense.
+    if (day <= durationDays) dayLabel = `Day ${day} of ${durationDays}`;
+    break;
+  }
+
+  return {
+    dayLabel,
+    lastDoseLabel: lastDose ? `Last dose ${formatDayMonth(lastDose, timeZone)}` : null,
+    takenCount,
+    totalDoses,
+    dueByNow,
+    notRecorded: Math.max(0, dueByNow - takenCount),
+    percentComplete:
+      totalDoses === 0 ? 0 : Math.min(100, Math.round((takenCount / totalDoses) * 100)),
   };
 }
 

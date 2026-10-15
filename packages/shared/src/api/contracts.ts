@@ -599,6 +599,27 @@ export const ConditionMedicationHistorySchema = z.object({
 });
 export type ConditionMedicationHistory = z.infer<typeof ConditionMedicationHistorySchema>;
 
+/**
+ * Where an illness's treatment has got to — the band above an open episode.
+ *
+ * `dueByNow` is the honest denominator mid-course: "8 of 21" alone reads as
+ * being behind when thirteen were never due yet. The pair of numbers is what
+ * makes five unrecorded doses visible without overstating them.
+ */
+export const ConditionProgressSchema = z.object({
+  /** "Day 5 of 7". Null when no course in it has an end date. */
+  dayLabel: z.string().nullable(),
+  /** "Last dose 17 October". */
+  lastDoseLabel: z.string().nullable(),
+  takenCount: z.number().int().min(0),
+  totalDoses: z.number().int().min(0),
+  dueByNow: z.number().int().min(0),
+  /** Due, with nothing recorded against them. */
+  notRecorded: z.number().int().min(0),
+  percentComplete: z.number().min(0).max(100),
+});
+export type ConditionProgress = z.infer<typeof ConditionProgressSchema>;
+
 /** One illness, start to finish, with everything that happened for it. */
 export const ConditionHistorySchema = z.object({
   _id: IdSchema,
@@ -612,6 +633,8 @@ export const ConditionHistorySchema = z.object({
   /** "11 days", "ongoing for 3 years". */
   durationLabel: NonEmptyString,
   doctorNames: z.array(NonEmptyString),
+  /** Null for a long-term condition: there is no course to be partway through. */
+  progress: ConditionProgressSchema.nullable(),
   visits: z.array(VisitDetailSchema),
   medications: z.array(ConditionMedicationHistorySchema),
   /** Set when this illness is a return of an earlier one. */
