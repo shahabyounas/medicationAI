@@ -325,7 +325,27 @@ function YearSection({
   onOpenCondition: (conditionId: string) => void;
   onOpenVisit: (visitId: string) => void;
 }): ReactNode {
-  const loose = year.months.flatMap((month) => month.entries);
+  /**
+   * The rows an episode card does not already say.
+   *
+   * Every illness emits its own log lines — the diagnosis, each medicine
+   * started, each one finished — and a card is built from exactly those. Left
+   * alone, one appointment therefore shows up five times on the same screen:
+   * once as the card and four more as rows beneath it, all carrying the same
+   * date. That duplication is what made the list feel endless.
+   *
+   * So a year shows its cards, plus the appointments no card in *this* year
+   * accounts for. That second clause matters: a diabetes review in 2026 belongs
+   * to an illness whose card sits in 2021, and dropping it on the grounds that
+   * it has a condition would erase the visit from the year it happened in.
+   */
+  const covered = new Set(year.episodes.map((episode) => episode.conditionId));
+  const loose = year.months
+    .flatMap((month) => month.entries)
+    .filter(
+      (entry) =>
+        entry.kind === 'visit' && (entry.conditionId === null || !covered.has(entry.conditionId)),
+    );
 
   return (
     <section style={{ marginTop: 22 }}>
@@ -424,6 +444,33 @@ function EpisodeCard({
               ? `All ${episode.totalDoses}`
               : `${episode.takenCount} of ${episode.totalDoses}`}
           </span>
+        </div>
+      )}
+
+      {/*
+        What the unfinished course went on to cost. Without this the record
+        archives a failure; with it, the record makes the argument the whole
+        app exists to make.
+      */}
+      {episode.note && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            marginTop: 11,
+            paddingTop: 10,
+            borderTop: '1px solid var(--card-border)',
+            font: '800 13.5px/1.35 var(--font)',
+            color: 'var(--red)',
+            textAlign: 'left',
+          }}
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M3 12a9 9 0 1 0 2.6-6.4" />
+            <path d="M3 4v4.5h4.5" />
+          </svg>
+          {episode.note}
         </div>
       )}
     </button>

@@ -203,3 +203,66 @@ describe('one illness in full', () => {
     expect(detail.recurrenceNote).toContain('returning');
   });
 });
+
+/**
+ * What an unfinished course went on to cost.
+ *
+ * The record's whole argument is that stopping early is not free. It can only
+ * make that argument if the card for the abandoned course names the illness
+ * that followed it — otherwise the two sit in the timeline as unrelated facts.
+ */
+describe('an illness that came back', () => {
+  it('labels the course that was abandoned with what followed', async () => {
+    const scenario = await createScenario();
+
+    const first = await collections.conditions.insert({
+      patientId: scenario.patient._id,
+      name: 'Throat infection',
+      status: 'recurred',
+      startedAt: new Date('2026-02-11T09:00:00Z'),
+      resolvedAt: new Date('2026-02-14T09:00:00Z'),
+      originVisitId: null,
+      recurrenceOfConditionId: null,
+      isChronic: false,
+    });
+    await collections.conditions.insert({
+      patientId: scenario.patient._id,
+      name: 'Throat infection',
+      status: 'active',
+      startedAt: new Date('2026-10-02T09:00:00Z'),
+      resolvedAt: null,
+      originVisitId: null,
+      recurrenceOfConditionId: first._id,
+      isChronic: false,
+    });
+
+    const history = await buildHistory(scenario.patient._id, new Date('2026-10-15T11:00:00Z'));
+    const episodes = history.years.flatMap((year) => year.episodes);
+
+    const abandoned = episodes.find((e) => e.conditionId === first._id);
+    expect(abandoned?.note).toBe('Came back in October');
+
+    // The return itself carries no note: it is the consequence, not the cause.
+    const returned = episodes.find((e) => e.conditionId !== first._id);
+    expect(returned?.note).toBeNull();
+  });
+
+  it('says nothing when an illness simply ended', async () => {
+    const scenario = await createScenario();
+    await collections.conditions.insert({
+      patientId: scenario.patient._id,
+      name: 'Urine infection',
+      status: 'resolved',
+      startedAt: new Date('2026-05-02T09:00:00Z'),
+      resolvedAt: new Date('2026-05-07T09:00:00Z'),
+      originVisitId: null,
+      recurrenceOfConditionId: null,
+      isChronic: false,
+    });
+
+    const history = await buildHistory(scenario.patient._id, new Date('2026-10-15T11:00:00Z'));
+    const episode = history.years.flatMap((y) => y.episodes).find((e) => e.name === 'Urine infection');
+
+    expect(episode?.note).toBeNull();
+  });
+});

@@ -319,6 +319,15 @@ function buildEpisodes(
   now: Date,
   timeZone: string,
 ): HistoryEpisode[] {
+  // An illness that returned points back at the one it returned from, so the
+  // abandoned course can be labelled with what it went on to cost.
+  const returnedInByOrigin = new Map<string, string>();
+  for (const condition of conditions) {
+    if (!condition.recurrenceOfConditionId) continue;
+    const month = MONTH_LABELS[wallClockIn(condition.startedAt, timeZone).month - 1];
+    if (month) returnedInByOrigin.set(condition.recurrenceOfConditionId, month);
+  }
+
   return conditions.map((condition) => {
     const theirs = courses.filter((course) => course.conditionId === condition._id);
     const first = theirs[0];
@@ -355,6 +364,9 @@ function buildEpisodes(
       totalDoses,
       percentComplete:
         totalDoses && totalDoses > 0 ? Math.min(100, Math.round((taken / totalDoses) * 100)) : 0,
+      note: returnedInByOrigin.has(condition._id)
+        ? `Came back in ${returnedInByOrigin.get(condition._id)}`
+        : null,
     };
   });
 }

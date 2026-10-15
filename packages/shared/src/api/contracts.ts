@@ -522,6 +522,14 @@ export const HistoryEpisodeSchema = z.object({
   /** Null for a long-term condition: there is no finish line to count to. */
   totalDoses: z.number().int().min(0).nullable(),
   percentComplete: z.number().min(0).max(100),
+  /**
+   * What this illness went on to cost — "Came back in October".
+   *
+   * Drawn on the course that was abandoned, pointing at the illness that
+   * followed it. This is the one line that makes the record argue rather than
+   * archive, and the whole reason an unfinished course is worth showing at all.
+   */
+  note: z.string().nullable(),
 });
 export type HistoryEpisode = z.infer<typeof HistoryEpisodeSchema>;
 
