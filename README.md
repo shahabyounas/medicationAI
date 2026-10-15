@@ -278,11 +278,85 @@ about the behaviour that matters.
 | `POST /api/push/subscribe` / `/unsubscribe` | Register or forget a device |
 | `POST /api/push/test` | Send a test notification to every registered device |
 | `POST /api/agent/tick` | Advance the agent one step |
+| `GET /api/agent/tick` | The same step, for Vercel Cron (which only sends GET) |
 | `GET /api/agent/escalation-path` | The ladder, walked from the graph |
 | `GET /api/agent/deliveries` | What the agent sent |
 
 Doctors, visits and conditions have full CRUD under `/api/doctors`,
 `/api/visits`, `/api/conditions`.
+
+---
+
+## Deployment
+
+Deployed to **Vercel**, with MongoDB on **Atlas**. Both halves live on one
+origin — the PWA as static files, the API as a single serverless function — so
+the browser calls `/api/...` exactly as it does locally. No CORS, no second
+domain, no API base URL baked into the build.
+
+```
+vercel.json
+  buildCommand   → packages/web/dist      (the PWA)
+  rewrites       → /api/(.*) → /api       (everything else)
+  functions      → api/index.ts           (the whole Express app)
+```
+
+`api/index.ts` re-exports `packages/server/src/serverless.ts`: the same
+`createApp()` as local, with a different lifecycle around it. Setup is lazy and
+cached per container, so the first request pays for the Mongo connection and the
+index check and the rest pay nothing.
+
+### One function, not one per route
+
+One cold start and one connection pool to reason about, rather than one of each
+per endpoint. Express is already the router; splitting it across files would
+mean duplicating that routing in the filesystem.
+
+### What changes when it is not a long-lived process
+
+Two things, and they are the only reasons any of this needed writing:
+
+- **The connection is cached on `globalThis`, and the cached value is the
+  *promise*.** A warm container may re-evaluate the module, and two requests can
+  land on a cold one at once; caching the resolved `Db` in module scope would
+  open a second socket in both cases. The pool is capped at 10 for the same
+  reason — every concurrent lambda holds its own, and that is how a shared Atlas
+  cluster runs out of connections.
+- **There is no agent loop.** `setInterval` inside a function that gets frozen
+  between requests fires unpredictably or never. Vercel Cron calls
+  `GET /api/agent/tick` instead, guarded by `CRON_SECRET`.
+
+### Setup
+
+Four environment variables in the Vercel project (Production *and* Preview):
+
+| Variable | Value |
+| --- | --- |
+| `MONGODB_URI` | The Atlas `mongodb+srv://...` string |
+| `MONGODB_DB` | `medication_ai` |
+| `CRON_SECRET` | Any long random string; Vercel sends it as a bearer token |
+| `AGENT_LOOP_ENABLED` | `false` — the cron drives the tick, not a timer |
+
+Plus `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` if you want push
+(`npm run vapid` generates the pair). Without them the app says push is
+unconfigured rather than failing.
+
+Atlas needs **Network Access → `0.0.0.0/0`**: Vercel's functions have no static
+egress IP to allowlist.
+
+### The cron interval is plan-bound
+
+`vercel.json` ships `0 6 * * *` — once a day — because that is the most a Vercel
+**Hobby** account permits, and a schedule it rejects fails the deploy. That is
+far too slow for an escalation ladder measured in minutes. On **Pro**, change it
+to the interval the agent was designed for:
+
+```json
+"crons": [{ "path": "/api/agent/tick", "schedule": "*/5 * * * *" }]
+```
+
+Until then the ladder only advances when something calls the tick —
+`POST /api/agent/tick`, which the app's own demo control already does.
 
 ---
 

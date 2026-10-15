@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Medication agent — turns a prescription into a finished course.",
+  "description": "Medication agent \u2014 turns a prescription into a finished course.",
   "workspaces": [
     "packages/shared",
     "packages/server",
@@ -17,7 +17,7 @@
     "dev:server": "npm run dev -w @medication-ai/server",
     "dev:web": "npm run dev -w @medication-ai/web",
     "build": "npm run build -w @medication-ai/server && npm run build -w @medication-ai/web",
-    "typecheck": "npm run typecheck -w @medication-ai/shared && npm run typecheck -w @medication-ai/server && npm run typecheck -w @medication-ai/web",
+    "typecheck": "npm run typecheck -w @medication-ai/shared && npm run typecheck -w @medication-ai/server && npm run typecheck -w @medication-ai/web && tsc --noEmit -p tsconfig.json",
     "test": "npm run test -w @medication-ai/shared && npm run test -w @medication-ai/server",
     "seed": "npm run seed -w @medication-ai/server",
     "vapid": "npm run vapid -w @medication-ai/server",

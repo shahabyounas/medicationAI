@@ -59,6 +59,15 @@ const EnvSchema = z.object({
   VAPID_PUBLIC_KEY: z.string().min(1).optional(),
   VAPID_PRIVATE_KEY: z.string().min(1).optional(),
   VAPID_SUBJECT: z.string().min(1).default('mailto:agent@medication.local'),
+
+  /**
+   * Shared secret for the scheduled agent tick.
+   *
+   * Vercel Cron sends `Authorization: Bearer <CRON_SECRET>` when this is set in
+   * the project. Without it the tick endpoint would be an unauthenticated way
+   * for anyone to drive the agent, so when it is configured it is required.
+   */
+  CRON_SECRET: z.string().min(1).optional(),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { AgentTickResponseSchema, escalationPath } from '@medication-ai/shared';
 import { asyncHandler } from '../http/errors.js';
+import { env } from '../env.js';
 import { tick } from '../agent/runner.js';
 import { deliveryChannel } from '../agent/channels.js';
 import { collections } from '../db/collections.js';
@@ -21,6 +22,33 @@ agentRouter.post(
   asyncHandler(async (req, res) => {
     const body = z.object({ now: z.coerce.date().optional() }).parse(req.body ?? {});
     const result = await tick(body.now ?? new Date());
+    res.json(AgentTickResponseSchema.parse(result));
+  }),
+);
+
+/**
+ * The scheduled tick.
+ *
+ * Deployed there is no in-process loop — a serverless function is frozen
+ * between requests, so a timer inside one cannot be the thing that chases a
+ * dose. Vercel Cron calls this instead, and Cron only ever sends GET, hence a
+ * second verb for the same work rather than a second implementation.
+ *
+ * Guarded by `CRON_SECRET` when one is configured: otherwise this would be an
+ * open endpoint that lets anyone advance another patient's escalation ladder.
+ * Unset (as locally, where the loop runs in-process) it stays open, because a
+ * secret that defaults to absent is clearer than one that defaults to a value.
+ */
+agentRouter.get(
+  '/tick',
+  asyncHandler(async (req, res) => {
+    if (env.CRON_SECRET && req.headers.authorization !== `Bearer ${env.CRON_SECRET}`) {
+      res.status(401).json({
+        error: { code: 'unauthorized', message: 'This endpoint requires the cron secret.' },
+      });
+      return;
+    }
+    const result = await tick(new Date());
     res.json(AgentTickResponseSchema.parse(result));
   }),
 );
