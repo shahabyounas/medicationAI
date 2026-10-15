@@ -10,7 +10,6 @@ import type {
   IntakeRequest,
   MedicinesResponse,
   PrescriptionDetail,
-  TodayResponse,
   VisitDetail,
   VisitsResponse,
 } from '@medication-ai/shared';

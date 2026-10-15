@@ -258,7 +258,7 @@ clinical advice even in principle.
 
 ## The attention cue
 
-When a dose is due or has been missed, the **Today** tab turns red and blinks a
+When a dose is due or has been missed, the **Record** tab turns red and blinks a
 dot — in the bottom bar on a phone, in the sidebar on a desktop. It is tied to a
 real outstanding dose and clears the moment one is confirmed, because a badge
 that is always lit stops being information within a day. Under
@@ -288,7 +288,9 @@ about the behaviour that matters.
 
 | Route | Purpose |
 | --- | --- |
-| `GET /api/patients/:id/today` | Home screen: next dose, nudge, progress, activity |
+| `GET /api/patients/:id/history` | Home screen: the lifetime record, newest first, with today's doses at the top |
+| `GET /api/conditions/:id/history` | One illness in full: visits, courses, every dose and the time it was taken |
+| `GET /api/patients/:id/today` | The day on its own: next dose, nudge, progress, activity |
 | `GET /api/patients/:id/medicines` | Medicines grouped by condition |
 | `GET /api/patients/:id/visits` | Doctors and visit history |
 | `GET /api/patients/:id/family` | Contacts, escalation order, recent alerts |

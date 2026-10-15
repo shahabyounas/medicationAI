@@ -2,156 +2,188 @@ import {
   CONDITION_STATUS_LABELS,
   COURSE_STATUS_LABELS,
   DOSE_STATUS_LABELS,
-  MINUTE_MS,
   calendarDaysBetween,
-  describeUnits,
   formatClockTime,
+  formatDayMonth,
+  isTaken,
+  wallClockIn,
   type Condition,
   type ConditionHistory,
+  type ConditionMedicationHistory,
   type Course,
   type Dose,
   type DoseLogEntry,
   type HistoryEntry,
   type HistoryResponse,
+  type HistoryYear,
   type MedicationForm,
+  type Prescription,
   type Visit,
+  type VisitDetail,
 } from '@medication-ai/shared';
 import { collections } from '../db/collections.js';
-import { describeItem } from './prescriptionService.js';
-import { getVisitDetail } from './recordService.js';
+import { listVisitDetails } from './recordService.js';
+import {
+  buildWaiting,
+  dayWindowIn,
+  greetingFor,
+  instructionLineFor,
+  medicationFormsByCourse,
+  toDoseView,
+} from './viewService.js';
 
 /**
  * The lifetime record.
  *
- * The app keeps everything: every illness, every appointment, every course and
- * every tablet actually swallowed, for as long as someone keeps using it. The
- * data for that already existed — a condition carries `startedAt`/`resolvedAt`,
- * a visit its date, a dose its `takenAt` — but nothing read it back as a
- * history. This does.
+ * One chronology, newest first, holding everything the app knows: illnesses
+ * opened and cleared, appointments, courses started and finished — and today's
+ * doses at the top of it, because a dose due in ten minutes is the newest thing
+ * in the record rather than a separate screen.
  *
- * Timestamps are never typed by the patient. Each one is the moment the thing
- * was recorded, which means the record is honest about when it learned
- * something rather than asking a person to remember a date and get it wrong.
+ * Every entry is built here rather than in the component. A record read across
+ * years is exactly where "day 4 of 7" and the bar beside it start disagreeing,
+ * and that only stays fixed if the dates, counts and copy are decided once.
  */
 
-/** Month names, written out — "Oct" saves four characters and costs clarity. */
-const MONTHS = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-];
+const MONTH_LABELS = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+] as const;
 
-function partsIn(instant: Date, timeZone: string): { year: number; month: number; day: number } {
-  const fmt = new Intl.DateTimeFormat('en-GB', {
-    timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
-  });
-  const parts = Object.fromEntries(fmt.formatToParts(instant).map((p) => [p.type, p.value]));
-  return {
-    year: Number(parts.year),
-    month: Number(parts.month),
-    day: Number(parts.day),
-  };
-}
+const TAKEN_FILTER = { $in: ['taken', 'taken_late'] } as const;
 
-/** "14 October" — the year is the heading these sit under. */
-function dayLabel(instant: Date, timeZone: string): string {
-  return new Intl.DateTimeFormat('en-GB', { timeZone, day: 'numeric', month: 'long' }).format(
-    instant,
-  );
-}
+export async function buildHistory(patientId: string, now = new Date()): Promise<HistoryResponse> {
+  const patient = await collections.patients.requireById(patientId);
+  const tz = patient.timezone;
 
-/** "14 October 2015" — for anything shown outside its year heading. */
-function fullDateLabel(instant: Date, timeZone: string): string {
-  return new Intl.DateTimeFormat('en-GB', {
-    timeZone, day: 'numeric', month: 'long', year: 'numeric',
-  }).format(instant);
-}
-
-/**
- * How much of a life this record covers.
- *
- * Counted from the earliest thing recorded, not from the account's creation: a
- * record that has been running eleven years should say so.
- */
-function spanLabelFor(earliest: Date | null, now: Date, timeZone: string): string {
-  if (!earliest) return 'Nothing recorded yet';
-  const days = Math.max(0, calendarDaysBetween(earliest, now, timeZone));
-  if (days < 1) return 'Started today';
-  if (days < 31) return `${days} ${days === 1 ? 'day' : 'days'} of records`;
-  const months = Math.floor(days / 30.44);
-  if (months < 12) return `${months} ${months === 1 ? 'month' : 'months'} of records`;
-  const years = Math.floor(days / 365.25);
-  return `${years} ${years === 1 ? 'year' : 'years'} of records`;
-}
-
-function durationLabelFor(condition: Condition, now: Date, timeZone: string): string {
-  const end = condition.resolvedAt ?? now;
-  const days = Math.max(0, calendarDaysBetween(condition.startedAt, end, timeZone));
-  const measure =
-    days < 31
-      ? `${days === 0 ? 'less than a day' : `${days} ${days === 1 ? 'day' : 'days'}`}`
-      : days < 365
-        ? `${Math.max(1, Math.floor(days / 30.44))} months`
-        : `${Math.max(1, Math.floor(days / 365.25))} years`;
-  if (condition.resolvedAt) return measure;
-  return condition.isChronic ? `ongoing for ${measure}` : `${measure} so far`;
-}
-
-/** Every dated thing in one flat list, before it is bucketed by year. */
-async function collectEntries(
-  patientId: string,
-  timeZone: string,
-): Promise<{ entries: HistoryEntry[]; conditions: Condition[]; visits: Visit[]; courses: Course[] }> {
-  const [conditions, visits, courses] = await Promise.all([
+  const [conditions, courses, visits, doctors, prescriptions] = await Promise.all([
     collections.conditions.find({ patientId }),
-    collections.visits.find({ patientId }),
     collections.courses.find({ patientId }),
+    collections.visits.find({ patientId }),
+    collections.doctors.find({ patientId }),
+    collections.prescriptions.find({ patientId }),
   ]);
 
-  const doctorIds = [...new Set(visits.map((v) => v.doctorId))];
-  const doctors = doctorIds.length
-    ? await collections.doctors.find({ _id: { $in: doctorIds } })
+  // The present, on the same terms as the old home screen: the patient's own
+  // midnight-to-midnight day, not UTC's.
+  const activeCourses = courses.filter((course) => course.status === 'active');
+  const { start: dayStart, end: dayEnd } = dayWindowIn(now, tz);
+  const todaysDoses = activeCourses.length
+    ? await collections.doses.find(
+        {
+          patientId,
+          courseId: { $in: activeCourses.map((course) => course._id) },
+          scheduledAt: { $gte: dayStart, $lt: dayEnd },
+        },
+        { sort: { scheduledAt: 1 } },
+      )
     : [];
-  const doctorNameById = new Map(doctors.map((d) => [d._id, d.name]));
-  const conditionNameById = new Map(conditions.map((c) => [c._id, c.name]));
 
-  const entries: HistoryEntry[] = [];
-  const add = (e: Omit<HistoryEntry, 'dateLabel'>): void => {
-    entries.push({ ...e, dateLabel: dayLabel(e.occurredAt, timeZone) });
+  const forms = await medicationFormsByCourse(activeCourses);
+  const due = todaysDoses.find((dose) => dose.status === 'due') ?? null;
+  const next = todaysDoses.find((dose) => dose.status === 'scheduled') ?? null;
+
+  const doctorNames = new Map(doctors.map((doctor) => [doctor._id, doctor.name]));
+  const conditionNames = new Map(conditions.map((condition) => [condition._id, condition.name]));
+  const prescriptionsById = new Map(prescriptions.map((p) => [p._id, p]));
+
+  // Only the courses that ended need their counts, and those are the entries
+  // that would otherwise read "Stopped Penicillin V" with no idea how far in.
+  const endedCourses = courses.filter(
+    (course) => course.status === 'completed' || course.status === 'stopped_early',
+  );
+  const takenByCourse = new Map<string, number>(
+    await Promise.all(
+      endedCourses.map(
+        async (course) =>
+          [
+            course._id,
+            await collections.doses.count({ courseId: course._id, status: TAKEN_FILTER }),
+          ] as const,
+      ),
+    ),
+  );
+
+  const entries = [
+    ...conditionEntries(conditions, tz),
+    ...visitEntries(visits, doctorNames, tz),
+    ...courseEntries(courses, prescriptionsById, doctorNames, conditionNames, takenByCourse, tz),
+  ];
+
+  const firstRecordedAt = entries.reduce<Date | null>(
+    (earliest, entry) =>
+      earliest === null || entry.occurredAt < earliest ? entry.occurredAt : earliest,
+    null,
+  );
+
+  return {
+    patientName: patient.name.split(' ')[0] ?? patient.name,
+    timeZone: tz,
+    greeting: greetingFor(now, tz),
+    due: due ? toDoseView(due, tz, forms) : null,
+    nextDose: next ? toDoseView(next, tz, forms) : null,
+    todayDoses: todaysDoses.map((dose) => toDoseView(dose, tz, forms)),
+    waiting: await buildWaiting(patientId, now, tz),
+    years: groupByYear(entries, tz),
+    totals: {
+      conditions: conditions.length,
+      visits: visits.length,
+      // Distinct medicines, not courses: the same antibiotic prescribed twice
+      // is one medicine the patient has been on, which is what the number is
+      // read as.
+      medicines: new Set(courses.map((course) => course.medicationId)).size,
+      dosesTaken: await collections.doses.count({ patientId, status: TAKEN_FILTER }),
+      firstRecordedAt,
+      spanLabel: spanLabelFor(firstRecordedAt, now),
+    },
   };
+}
 
-  for (const visit of visits) {
-    add({
-      id: `visit:${visit._id}`,
-      kind: 'visit',
-      occurredAt: visit.visitDate,
-      title: `Saw ${doctorNameById.get(visit.doctorId) ?? 'a doctor'}`,
-      detail: visit.diagnosis ?? visit.reason,
-      conditionId: visit.conditionId,
-      visitId: visit._id,
-      doctorName: doctorNameById.get(visit.doctorId) ?? null,
-    });
-  }
+/* -------------------------------------------------------------------------- */
+/* Entries                                                                    */
+/* -------------------------------------------------------------------------- */
+
+function conditionEntries(conditions: readonly Condition[], timeZone: string): HistoryEntry[] {
+  const entries: HistoryEntry[] = [];
 
   for (const condition of conditions) {
-    const recurrence = condition.recurrenceOfConditionId !== null;
-    add({
-      id: `condition-open:${condition._id}`,
-      kind: recurrence ? 'condition_recurred' : 'condition_opened',
+    // A condition carrying `recurrenceOfConditionId` *is* the return of an
+    // earlier one, so its opening is the moment it came back.
+    const isReturn = condition.recurrenceOfConditionId !== null;
+
+    entries.push({
+      id: `${condition._id}:opened`,
+      kind: isReturn ? 'condition_recurred' : 'condition_opened',
       occurredAt: condition.startedAt,
-      title: recurrence ? `${condition.name} came back` : condition.name,
-      detail: condition.plainDescription ?? (condition.isChronic ? 'A long-term condition' : null),
+      dateLabel: formatDayMonth(condition.startedAt, timeZone),
+      title: isReturn ? `${condition.name} came back` : condition.name,
+      detail: condition.plainDescription ?? null,
       conditionId: condition._id,
       visitId: condition.originVisitId,
       doctorName: null,
     });
 
     if (condition.resolvedAt) {
-      add({
-        id: `condition-resolved:${condition._id}`,
+      entries.push({
+        id: `${condition._id}:resolved`,
         kind: 'condition_resolved',
         occurredAt: condition.resolvedAt,
+        dateLabel: formatDayMonth(condition.resolvedAt, timeZone),
         title: `${condition.name} resolved`,
-        detail: null,
+        // `recurred` is the record saying this one did not stay resolved. It
+        // belongs at the end of the episode, where the reader is looking at
+        // what the treatment achieved.
+        detail: condition.status === 'recurred' ? 'It came back later.' : null,
         conditionId: condition._id,
         visitId: null,
         doctorName: null,
@@ -159,221 +191,209 @@ async function collectEntries(
     }
   }
 
-  for (const course of courses) {
-    if (course.startedAt) {
-      add({
-        id: `course-start:${course._id}`,
-        kind: 'course_started',
-        occurredAt: course.startedAt,
-        title: `Started ${course.medicationName}`,
-        detail: course.conditionId
-          ? `For ${conditionNameById.get(course.conditionId) ?? 'a condition'}`
-          : null,
-        conditionId: course.conditionId,
-        visitId: null,
-        doctorName: null,
-      });
-    }
-
-    if (course.completedAt) {
-      const stopped = course.status === 'stopped_early';
-      add({
-        id: `course-end:${course._id}`,
-        kind: stopped ? 'course_stopped' : 'course_completed',
-        occurredAt: course.completedAt,
-        title: stopped
-          ? `Stopped ${course.medicationName} early`
-          : `Finished ${course.medicationName}`,
-        detail: course.totalDoses ? `${course.totalDoses} planned in all` : null,
-        conditionId: course.conditionId,
-        visitId: null,
-        doctorName: null,
-      });
-    }
-  }
-
-  return { entries, conditions, visits, courses };
+  return entries;
 }
 
-export async function buildHistory(patientId: string, now = new Date()): Promise<HistoryResponse> {
-  const patient = await collections.patients.requireById(patientId);
-  const tz = patient.timezone;
+function visitEntries(
+  visits: readonly Visit[],
+  doctorNames: Map<string, string>,
+  timeZone: string,
+): HistoryEntry[] {
+  return visits.map((visit) => {
+    const doctorName = doctorNames.get(visit.doctorId) ?? null;
+    return {
+      id: `${visit._id}:visit`,
+      kind: 'visit' as const,
+      occurredAt: visit.visitDate,
+      dateLabel: formatDayMonth(visit.visitDate, timeZone),
+      title: doctorName ? `Saw ${doctorName}` : 'Appointment',
+      // What the doctor concluded, or failing that what took the patient in.
+      detail: visit.diagnosis ?? visit.reason,
+      conditionId: visit.conditionId,
+      visitId: visit._id,
+      doctorName,
+    };
+  });
+}
 
-  const { entries, conditions, visits, courses } = await collectEntries(patientId, tz);
-  entries.sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
+function courseEntries(
+  courses: readonly Course[],
+  prescriptionsById: Map<string, Prescription>,
+  doctorNames: Map<string, string>,
+  conditionNames: Map<string, string>,
+  takenByCourse: Map<string, number>,
+  timeZone: string,
+): HistoryEntry[] {
+  const entries: HistoryEntry[] = [];
 
-  // Bucket into years, then months, both newest first. Built from a Map rather
-  // than a sort over groups so a year with one entry costs the same as a busy one.
-  const byYear = new Map<number, Map<number, HistoryEntry[]>>();
-  for (const entry of entries) {
-    const { year, month } = partsIn(entry.occurredAt, tz);
-    const months = byYear.get(year) ?? new Map<number, HistoryEntry[]>();
-    const bucket = months.get(month) ?? [];
-    bucket.push(entry);
-    months.set(month, bucket);
-    byYear.set(year, months);
+  for (const course of courses) {
+    const prescription = prescriptionsById.get(course.prescriptionId);
+    const doctorName = prescription ? (doctorNames.get(prescription.doctorId) ?? null) : null;
+    const conditionName = course.conditionId
+      ? (conditionNames.get(course.conditionId) ?? null)
+      : null;
+
+    if (course.startedAt) {
+      entries.push({
+        id: `${course._id}:started`,
+        kind: 'course_started',
+        occurredAt: course.startedAt,
+        dateLabel: formatDayMonth(course.startedAt, timeZone),
+        title: `Started ${course.medicationName}`,
+        detail: [
+          conditionName ? `For ${conditionName.toLowerCase()}` : null,
+          course.totalDoses === null ? 'no end date' : `${course.totalDoses} doses`,
+        ]
+          .filter(Boolean)
+          .join(' · '),
+        conditionId: course.conditionId,
+        visitId: null,
+        doctorName,
+      });
+    }
+
+    if (!course.completedAt) continue;
+
+    const taken = takenByCourse.get(course._id) ?? 0;
+
+    if (course.status === 'completed') {
+      entries.push({
+        id: `${course._id}:completed`,
+        kind: 'course_completed',
+        occurredAt: course.completedAt,
+        dateLabel: formatDayMonth(course.completedAt, timeZone),
+        title: `Finished ${course.medicationName}`,
+        detail:
+          course.totalDoses === null
+            ? `${taken} doses taken`
+            : `All ${course.totalDoses} doses taken`,
+        conditionId: course.conditionId,
+        visitId: null,
+        doctorName,
+      });
+      continue;
+    }
+
+    if (course.status === 'stopped_early') {
+      entries.push({
+        id: `${course._id}:stopped`,
+        kind: 'course_stopped',
+        occurredAt: course.completedAt,
+        dateLabel: formatDayMonth(course.completedAt, timeZone),
+        title: `Stopped ${course.medicationName}`,
+        detail:
+          course.totalDoses === null
+            ? `${taken} doses taken, then it stopped`
+            : `${taken} of ${course.totalDoses} doses taken`,
+        conditionId: course.conditionId,
+        visitId: null,
+        doctorName,
+      });
+    }
   }
 
-  const years = [...byYear.entries()]
-    .sort((a, b) => b[0] - a[0])
+  return entries;
+}
+
+/**
+ * Entries into years and months, newest first.
+ *
+ * Grouped on the patient's wall clock rather than UTC's, so a dose taken at
+ * 11pm on 31 December does not file itself under the following year.
+ */
+function groupByYear(entries: readonly HistoryEntry[], timeZone: string): HistoryYear[] {
+  const byYear = new Map<number, Map<number, HistoryEntry[]>>();
+
+  for (const entry of entries) {
+    const wall = wallClockIn(entry.occurredAt, timeZone);
+    const months = byYear.get(wall.year) ?? new Map<number, HistoryEntry[]>();
+    months.set(wall.month, [...(months.get(wall.month) ?? []), entry]);
+    byYear.set(wall.year, months);
+  }
+
+  return [...byYear.entries()]
+    .sort(([a], [b]) => b - a)
     .map(([year, months]) => ({
       year,
       label: String(year),
       entryCount: [...months.values()].reduce((sum, list) => sum + list.length, 0),
       months: [...months.entries()]
-        .sort((a, b) => b[0] - a[0])
+        .sort(([a], [b]) => b - a)
         .map(([month, list]) => ({
           month,
-          label: MONTHS[month - 1] ?? String(month),
-          entries: list,
+          label: MONTH_LABELS[month - 1] ?? String(month),
+          entries: [...list].sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime()),
         })),
     }));
-
-  const dosesTaken = await collections.doses.count({
-    patientId,
-    status: { $in: ['taken', 'taken_late'] },
-  });
-
-  const earliest = entries.at(-1)?.occurredAt ?? null;
-
-  return {
-    patientName: patient.name.split(' ')[0] ?? patient.name,
-    timeZone: tz,
-    greeting: greetingFor(now, tz),
-    ...(await buildNowBand(patientId, tz, now)),
-    years,
-    totals: {
-      conditions: conditions.length,
-      visits: visits.length,
-      medicines: new Set(courses.map((c) => c.medicationName)).size,
-      dosesTaken,
-      firstRecordedAt: earliest,
-      spanLabel: spanLabelFor(earliest, now, tz),
-    },
-  };
 }
 
-function greetingFor(instant: Date, timeZone: string): string {
-  const hour = Number.parseInt(
-    new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', hourCycle: 'h23' }).format(instant),
-    10,
+/** "4 months of records", "12 years of records". */
+function spanLabelFor(firstRecordedAt: Date | null, now: Date): string {
+  if (!firstRecordedAt) return 'Nothing recorded yet';
+
+  const days = Math.max(
+    0,
+    Math.round((now.getTime() - firstRecordedAt.getTime()) / (24 * 60 * 60 * 1000)),
   );
-  if (hour < 12) return 'Good morning';
-  if (hour < 18) return 'Good afternoon';
-  return 'Good evening';
-}
+  if (days < 31) return 'Records start this month';
 
-/**
- * What is outstanding right now, pinned above the record.
- *
- * Reuses the Today read model rather than recomputing it: the day window, the
- * waiting prescriptions and the dose views are decided in one place, and two
- * screens disagreeing about what is due is exactly the bug that costs a tablet.
- */
-async function buildNowBand(
-  patientId: string,
-  _timeZone: string,
-  now: Date,
-): Promise<Pick<HistoryResponse, 'due' | 'nextDose' | 'todayDoses' | 'waiting'>> {
-  const { buildToday } = await import('./viewService.js');
-  const today = await buildToday(patientId, now);
-  return {
-    due: today.doses.find((d) => d.status === 'due') ?? null,
-    nextDose: today.nextDose,
-    todayDoses: today.doses,
-    waiting: today.waiting,
-  };
+  const years = Math.floor(days / 365);
+  if (years >= 1) return `${years} ${years === 1 ? 'year' : 'years'} of records`;
+
+  const months = Math.max(1, Math.floor(days / 30));
+  return `${months} ${months === 1 ? 'month' : 'months'} of records`;
 }
 
 /* -------------------------------------------------------------------------- */
+/* One illness, in full                                                       */
+/* -------------------------------------------------------------------------- */
 
-function toDoseLogEntry(dose: Dose, timeZone: string): DoseLogEntry {
-  const minutesLate =
-    dose.takenAt === null
-      ? null
-      : Math.round((dose.takenAt.getTime() - dose.scheduledAt.getTime()) / MINUTE_MS);
-
-  return {
-    _id: dose._id,
-    doseNumber: dose.doseNumber,
-    scheduledAt: dose.scheduledAt,
-    takenAt: dose.takenAt,
-    status: dose.status,
-    statusLabel: DOSE_STATUS_LABELS[dose.status],
-    dateLabel: fullDateLabel(dose.scheduledAt, timeZone),
-    scheduledTimeLabel: formatClockTime(dose.scheduledAt, timeZone),
-    takenTimeLabel: dose.takenAt ? formatClockTime(dose.takenAt, timeZone) : null,
-    minutesLate,
-  };
-}
-
-/**
- * One illness in full: what it was, who was seen about it, what was prescribed,
- * and every individual dose with the time it was actually swallowed.
- */
-export async function buildConditionHistory(conditionId: string): Promise<ConditionHistory> {
+export async function buildConditionHistory(
+  conditionId: string,
+  now = new Date(),
+): Promise<ConditionHistory> {
   const condition = await collections.conditions.requireById(conditionId);
   const patient = await collections.patients.requireById(condition.patientId);
   const tz = patient.timezone;
-  const now = new Date();
 
-  const visits = await collections.visits.find({ conditionId }, { sort: { visitDate: -1 } });
-  const visitDetails = await Promise.all(visits.map((v) => getVisitDetail(v._id)));
+  const [courses, allVisits] = await Promise.all([
+    collections.courses.find({ conditionId }, { sort: { createdAt: 1 } }),
+    listVisitDetails(condition.patientId),
+  ]);
 
-  const courses = await collections.courses.find({ conditionId }, { sort: { createdAt: 1 } });
-
-  const medicationIds = [...new Set(courses.map((c) => c.medicationId))];
-  const medications = medicationIds.length
-    ? await collections.medications.find({ _id: { $in: medicationIds } })
-    : [];
-  const formById = new Map<string, MedicationForm>(medications.map((m) => [m._id, m.form]));
-
-  const prescriptionIds = [...new Set(courses.map((c) => c.prescriptionId))];
-  const prescriptions = prescriptionIds.length
-    ? await collections.prescriptions.find({ _id: { $in: prescriptionIds } })
-    : [];
-
-  const medicationsHistory = await Promise.all(
-    courses.map(async (course) => {
-      const doses = await collections.doses.find(
-        { courseId: course._id },
-        { sort: { scheduledAt: -1 } },
-      );
-      const form = formById.get(course.medicationId) ?? 'tablet';
-
-      // The instruction as written on the prescription, so the log says what
-      // was actually asked for rather than re-deriving it from the schedule.
-      const prescription = prescriptions.find((p) => p._id === course.prescriptionId);
-      const item = prescription?.items.find((i) => i.id === course.prescriptionItemId);
-      const instructionLine = item
-        ? describeItem(item, form)
-        : `${describeUnits(course.amountPerDose, form)}, ${course.frequency.timesPerDay} times a day`;
-
-      const count = (predicate: (d: Dose) => boolean): number => doses.filter(predicate).length;
-
-      return {
-        courseId: course._id,
-        medicationName: course.medicationName,
-        medicationForm: form,
-        instructionLine,
-        status: course.status,
-        statusLabel: COURSE_STATUS_LABELS[course.status],
-        startedAt: course.startedAt,
-        endedAt: course.completedAt,
-        totalDoses: course.totalDoses,
-        takenCount: count((d) => d.status === 'taken' || d.status === 'taken_late'),
-        missedCount: count((d) => d.status === 'missed'),
-        skippedCount: count((d) => d.status === 'skipped'),
-        doses: doses.map((d) => toDoseLogEntry(d, tz)),
-      };
-    }),
+  // The visit that opened the illness counts even if it was filed before the
+  // condition existed and never got the back-reference.
+  const visits = allVisits.filter(
+    (visit) => visit.conditionId === conditionId || visit._id === condition.originVisitId,
   );
 
-  const doctorNames = [...new Set(visitDetails.map((v) => v.doctorName))];
+  const forms = await medicationFormsByCourse(courses);
+  const medications: ConditionMedicationHistory[] = [];
 
-  const recurrenceNote = condition.recurrenceOfConditionId
-    ? 'This is the same illness returning after an earlier course was not finished.'
-    : null;
+  for (const course of courses) {
+    const form: MedicationForm = forms.get(course._id) ?? 'tablet';
+    // Newest first: "did I take the last one?" is the question being asked.
+    const doses = await collections.doses.find(
+      { courseId: course._id },
+      { sort: { scheduledAt: -1 } },
+    );
+
+    medications.push({
+      courseId: course._id,
+      medicationName: course.medicationName,
+      medicationForm: form,
+      instructionLine: instructionLineFor(course, form),
+      status: course.status,
+      statusLabel: COURSE_STATUS_LABELS[course.status],
+      startedAt: course.startedAt,
+      endedAt: course.completedAt,
+      totalDoses: course.totalDoses,
+      takenCount: doses.filter((dose) => isTaken(dose.status)).length,
+      missedCount: doses.filter((dose) => dose.status === 'missed').length,
+      skippedCount: doses.filter((dose) => dose.status === 'skipped').length,
+      doses: doses.map((dose) => toDoseLogEntry(dose, tz)),
+    });
+  }
 
   return {
     _id: condition._id,
@@ -385,10 +405,96 @@ export async function buildConditionHistory(conditionId: string): Promise<Condit
     startedAt: condition.startedAt,
     resolvedAt: condition.resolvedAt,
     durationLabel: durationLabelFor(condition, now, tz),
-    doctorNames,
-    visits: visitDetails,
-    medications: medicationsHistory,
+    doctorNames: [...new Set(visits.map((visit) => visit.doctorName))],
+    visits,
+    medications,
     recurrenceOfConditionId: condition.recurrenceOfConditionId,
-    recurrenceNote,
+    recurrenceNote: await recurrenceNoteFor(condition, tz),
   };
+}
+
+function toDoseLogEntry(dose: Dose, timeZone: string): DoseLogEntry {
+  return {
+    _id: dose._id,
+    doseNumber: dose.doseNumber,
+    scheduledAt: dose.scheduledAt,
+    takenAt: dose.takenAt,
+    status: dose.status,
+    statusLabel: DOSE_STATUS_LABELS[dose.status],
+    dateLabel: formatDayMonthYear(dose.scheduledAt, timeZone),
+    scheduledTimeLabel: formatClockTime(dose.scheduledAt, timeZone),
+    takenTimeLabel: dose.takenAt ? formatClockTime(dose.takenAt, timeZone) : null,
+    minutesLate: dose.takenAt
+      ? Math.round((dose.takenAt.getTime() - dose.scheduledAt.getTime()) / (60 * 1000))
+      : null,
+  };
+}
+
+/** "11 days", "ongoing for 5 years". */
+function durationLabelFor(condition: Condition, now: Date, timeZone: string): string {
+  const days = Math.max(
+    0,
+    calendarDaysBetween(condition.startedAt, condition.resolvedAt ?? now, timeZone),
+  );
+
+  if (condition.resolvedAt === null) {
+    if (days === 0) return 'started today';
+    if (days >= 365) {
+      const years = Math.floor(days / 365);
+      return `ongoing for ${years} ${years === 1 ? 'year' : 'years'}`;
+    }
+    if (days >= 60) return `ongoing for ${Math.floor(days / 30)} months`;
+    return `ongoing for ${days} ${days === 1 ? 'day' : 'days'}`;
+  }
+
+  // Inclusive of both ends: 2–7 May is six days of being ill, not five.
+  const span = days + 1;
+  return `${span} ${span === 1 ? 'day' : 'days'}`;
+}
+
+/**
+ * What the record can say about an illness that returned.
+ *
+ * Facts only — the earlier course, how far it got, and the gap. Whether
+ * stopping early *caused* the return is a clinical judgement the agent is not
+ * allowed to make, so it states the two dates and stops.
+ */
+async function recurrenceNoteFor(condition: Condition, timeZone: string): Promise<string | null> {
+  const previousId = condition.recurrenceOfConditionId;
+  if (!previousId) return null;
+
+  const previous = await collections.conditions.findById(previousId);
+  if (!previous) return null;
+
+  const gap = Math.max(
+    0,
+    calendarDaysBetween(previous.resolvedAt ?? previous.startedAt, condition.startedAt, timeZone),
+  );
+  const when = formatDayMonth(previous.startedAt, timeZone);
+
+  const courses = await collections.courses.find({ conditionId: previous._id });
+  const stopped = courses.find((course) => course.status === 'stopped_early');
+  const illness = previous.name.toLowerCase();
+  if (!stopped) {
+    return `This is ${illness} returning. You had it from ${when}, ${gap} days before this one.`;
+  }
+
+  const taken = await collections.doses.count({ courseId: stopped._id, status: TAKEN_FILTER });
+  const total = stopped.totalDoses;
+
+  return (
+    `This is ${illness} returning. You had it from ${when}; that course of ` +
+    `${stopped.medicationName} stopped after ${taken}${total === null ? '' : ` of ${total}`} ` +
+    `doses, and it came back ${gap} days later.`
+  );
+}
+
+/** "14 Oct 2026" — the dose log spans years, so the year has to be in it. */
+function formatDayMonthYear(instant: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  }).format(instant);
 }
