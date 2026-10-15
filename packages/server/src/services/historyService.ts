@@ -179,8 +179,8 @@ function conditionEntries(conditions: readonly Condition[], timeZone: string): H
         kind: 'condition_resolved',
         occurredAt: condition.resolvedAt,
         dateLabel: formatDayMonth(condition.resolvedAt, timeZone),
-        title: `${condition.name} cleared`,
-        // `recurred` is the record saying this one did not stay cleared. It
+        title: `${condition.name} resolved`,
+        // `recurred` is the record saying this one did not stay resolved. It
         // belongs at the end of the episode, where the reader is looking at
         // what the treatment achieved.
         detail: condition.status === 'recurred' ? 'It came back later.' : null,
@@ -474,17 +474,18 @@ async function recurrenceNoteFor(condition: Condition, timeZone: string): Promis
 
   const courses = await collections.courses.find({ conditionId: previous._id });
   const stopped = courses.find((course) => course.status === 'stopped_early');
+  const illness = previous.name.toLowerCase();
   if (!stopped) {
-    return `You had this before, from ${when}. It returned ${gap} days later.`;
+    return `This is ${illness} returning. You had it from ${when}, ${gap} days before this one.`;
   }
 
   const taken = await collections.doses.count({ courseId: stopped._id, status: TAKEN_FILTER });
   const total = stopped.totalDoses;
 
   return (
-    `You had this before, from ${when}. That course of ${stopped.medicationName} ` +
-    `stopped after ${taken}${total === null ? '' : ` of ${total}`} doses, and it returned ` +
-    `${gap} days later.`
+    `This is ${illness} returning. You had it from ${when}; that course of ` +
+    `${stopped.medicationName} stopped after ${taken}${total === null ? '' : ` of ${total}`} ` +
+    `doses, and it came back ${gap} days later.`
   );
 }
 
