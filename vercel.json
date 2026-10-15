@@ -1,14 +1,23 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "npm run build -w @medication-ai/web",
+  "buildCommand": "npm run build:fn && npm run build -w @medication-ai/web",
   "outputDirectory": "packages/web/dist",
   "installCommand": "npm install",
   "functions": {
     "api/index.ts": {
-      "maxDuration": 30,
-      "memory": 1024
+      "maxDuration": 30
     }
   },
-  "rewrites": [{ "source": "/api/(.*)", "destination": "/api" }],
-  "crons": [{ "path": "/api/agent/tick", "schedule": "0 6 * * *" }]
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/agent/tick",
+      "schedule": "0 6 * * *"
+    }
+  ]
 }

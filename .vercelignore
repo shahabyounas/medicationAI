@@ -1,3 +1,11 @@
+# Never ship local secrets or local-only config into the function bundle. The
+# server walks up from cwd looking for a .env, so a copy of the developer's file
+# inside the lambda is a silent fallback to localhost when a platform
+# environment variable is missing — and it carries the local VAPID private key.
+.env
+.env.local
+.env.*.local
+
 docker-compose.yml
 **/*.test.ts
 packages/server/src/testing

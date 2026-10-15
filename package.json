@@ -23,7 +23,8 @@
     "vapid": "npm run vapid -w @medication-ai/server",
     "mongo:up": "docker compose up -d mongo",
     "mongo:down": "docker compose down",
-    "verify": "npm run typecheck && npm run test && npm run build"
+    "verify": "npm run typecheck && npm run test && npm run build",
+    "build:fn": "npm run build:fn -w @medication-ai/server"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

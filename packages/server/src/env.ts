@@ -16,6 +16,13 @@ import { z } from 'zod';
 function loadDotEnv(): void {
   if (typeof process.loadEnvFile !== 'function') return;
 
+  // Never on a deployment platform. There the environment *is* the config, and
+  // a `.env` that rode along in the bundle can only do harm: real variables
+  // already win, so the file's only remaining effect is to supply a value for
+  // one that is missing — turning a loud "MONGODB_URI is not set" into a lambda
+  // quietly dialling 127.0.0.1 and failing to connect.
+  if (process.env.VERCEL) return;
+
   let directory = resolve(process.cwd());
   for (let depth = 0; depth < 5; depth += 1) {
     const candidate = join(directory, '.env');
@@ -73,6 +80,17 @@ const EnvSchema = z.object({
 export type Env = z.infer<typeof EnvSchema>;
 
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
+  // The localhost default below is a convenience for a fresh clone, and a trap
+  // on a deployment platform: it turns a forgotten environment variable into a
+  // lambda dialling 127.0.0.1 and reporting a connection timeout, which reads
+  // as "the database is down" rather than "nobody told me where it is".
+  if (source.VERCEL && !source.MONGODB_URI) {
+    throw new Error(
+      'MONGODB_URI is not set. On Vercel it must be configured explicitly — ' +
+        'there is no local MongoDB to fall back to.',
+    );
+  }
+
   const parsed = EnvSchema.safeParse(source);
   if (!parsed.success) {
     const problems = parsed.error.issues

@@ -11,7 +11,8 @@
     "seed": "tsx src/seed.ts",
     "vapid": "tsx src/scripts/generateVapid.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build:fn": "esbuild src/serverless.ts --bundle --platform=node --format=esm --target=node20 --outfile=../../api/_server.mjs --external:express --external:cors --external:mongodb --external:zod --external:web-push"
   },
   "dependencies": {
     "@medication-ai/shared": "*",
@@ -30,10 +31,5 @@
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "vitest": "^3.2.4"
-  },
-  "exports": {
-    ".": "./src/index.ts",
-    "./serverless": "./src/serverless.ts",
-    "./app": "./src/app.ts"
   }
 }
