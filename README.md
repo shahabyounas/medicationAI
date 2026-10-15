@@ -344,19 +344,22 @@ unconfigured rather than failing.
 Atlas needs **Network Access → `0.0.0.0/0`**: Vercel's functions have no static
 egress IP to allowlist.
 
-### The cron interval is plan-bound
+### No scheduled tick
 
-`vercel.json` ships `0 6 * * *` — once a day — because that is the most a Vercel
-**Hobby** account permits, and a schedule it rejects fails the deploy. That is
-far too slow for an escalation ladder measured in minutes. On **Pro**, change it
-to the interval the agent was designed for:
+`vercel.json` declares no cron. Vercel **Hobby** allows a daily one at most,
+which is useless to a ladder measured in minutes — a once-a-day rung is not a
+reminder — so rather than ship a schedule that only looks like it works, the
+deployment has none. The agent advances when something calls the tick:
+`POST /api/agent/tick`, which the app's own demo control does.
+
+`GET /api/agent/tick` is still there, still guarded by `CRON_SECRET`, so turning
+it on later is one block in `vercel.json` and no code change:
 
 ```json
 "crons": [{ "path": "/api/agent/tick", "schedule": "*/5 * * * *" }]
 ```
 
-Until then the ladder only advances when something calls the tick —
-`POST /api/agent/tick`, which the app's own demo control already does.
+That interval needs **Pro**; on Hobby the deploy is rejected outright.
 
 ---
 

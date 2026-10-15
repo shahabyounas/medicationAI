@@ -13,11 +13,5 @@
       "source": "/api/(.*)",
       "destination": "/api"
     }
-  ],
-  "crons": [
-    {
-      "path": "/api/agent/tick",
-      "schedule": "0 6 * * *"
-    }
   ]
 }
