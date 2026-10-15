@@ -29,7 +29,7 @@ binds IPv6).
 
 **Start here:** the app has no data until you add some. Press **+ Add a
 prescription** on any screen, or run `npm run seed` for the design's worked
-scenario (Nasreen, day 4 of a 7-day course).
+scenario (Tom, day 4 of a 7-day course).
 
 > **Why 27018?** A MongoDB already running on your machine binds
 > `127.0.0.1:27017` *specifically*, which beats Docker's `0.0.0.0` binding. The

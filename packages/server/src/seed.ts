@@ -13,7 +13,7 @@ import { logAgentEvent } from './services/agentEventService.js';
 /**
  * Seeds the scenario from the design document.
  *
- * Nasreen is on day 4 of a 7-day chest infection course — the exact moment the
+ * Tom is on day 4 of a 7-day chest infection course — the exact moment the
  * design is about, because day 3–4 is when people stop. Her record also carries
  * the two earlier conditions the design shows: a urine infection she completed,
  * and a throat infection she abandoned on day 4 that came back eleven days
@@ -46,7 +46,7 @@ async function seed(): Promise<void> {
   // --- The patient ---------------------------------------------------------
 
   const patient = await collections.patients.insert({
-    name: 'Nasreen Ahmed',
+    name: 'Tom Cruise',
     phone: '+447700900123',
     dateOfBirth: dateOf(1954, 3, 17),
     timezone: TZ,
@@ -54,7 +54,7 @@ async function seed(): Promise<void> {
     familyContacts: [
       {
         id: randomUUID(),
-        name: 'Bilal Ahmed',
+        name: 'Bilal Cruise',
         relation: 'son',
         phone: '+447700900456',
         notifyAfterMinutes: 180,
@@ -469,7 +469,7 @@ async function playHistory(doses: readonly Dose[], conditionId: string): Promise
     channel: 'family',
     summary: 'Told Bilal after 2 missed doses',
     message:
-      "Nasreen's 9:00 PM Amoxicillin is unanswered after three hours. This is day 3 of 7 — " +
+      "Tom's 9:00 PM Amoxicillin is unanswered after three hours. This is day 3 of 7 — " +
       'the point most people stop. A phone call works better than another reminder.',
     escalationNodeId: 'notify_family',
     visibleToFamily: true,
