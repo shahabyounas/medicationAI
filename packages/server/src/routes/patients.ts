@@ -2,6 +2,7 @@ import { Router } from 'express';
 import {
   CreatePatientSchema,
   FamilyResponseSchema,
+  HistoryResponseSchema,
   MedicinesResponseSchema,
   PatientSchema,
   TodayResponseSchema,
@@ -14,6 +15,7 @@ import { collections } from '../db/collections.js';
 import { asyncHandler, parseBody, pathParam } from '../http/errors.js';
 import { buildFamily, buildMedicines, buildToday } from '../services/viewService.js';
 import { reanchorToMealtimes } from '../services/doseService.js';
+import { buildHistory } from '../services/historyService.js';
 import { buildVisitsResponse } from '../services/recordService.js';
 import { VisitsResponseSchema } from '@medication-ai/shared';
 
@@ -86,6 +88,14 @@ patientsRouter.get(
   asyncHandler(async (req, res) => {
     const today = await buildToday(pathParam(req, 'patientId'));
     res.json(TodayResponseSchema.parse(today));
+  }),
+);
+
+patientsRouter.get(
+  '/:patientId/history',
+  asyncHandler(async (req, res) => {
+    const history = await buildHistory(pathParam(req, 'patientId'));
+    res.json(HistoryResponseSchema.parse(history));
   }),
 );
 

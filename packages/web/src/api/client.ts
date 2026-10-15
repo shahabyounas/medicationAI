@@ -1,6 +1,8 @@
 import {
   AgentTickResponseSchema,
+  ConditionHistorySchema,
   CourseReportSchema,
+  HistoryResponseSchema,
   IntakeOptionsResponseSchema,
   IntakeResponseSchema,
   PrescriptionDetailSchema,
@@ -12,7 +14,9 @@ import {
   TodayResponseSchema,
   VisitsResponseSchema,
   type AgentTickResponse,
+  type ConditionHistory,
   type CourseReport,
+  type HistoryResponse,
   type IntakeOptionsResponse,
   type IntakeRequest,
   type IntakeResponse,
@@ -110,6 +114,14 @@ export const api = {
 
   today: (patientId: string): Promise<TodayResponse> =>
     request(`/patients/${patientId}/today`, TodayResponseSchema),
+
+  /** The lifetime record, newest first. */
+  history: (patientId: string): Promise<HistoryResponse> =>
+    request(`/patients/${patientId}/history`, HistoryResponseSchema),
+
+  /** One illness in full, down to every dose and the time it was taken. */
+  conditionHistory: (conditionId: string): Promise<ConditionHistory> =>
+    request(`/conditions/${conditionId}/history`, ConditionHistorySchema),
 
   medicines: (patientId: string): Promise<MedicinesResponse> =>
     request(`/patients/${patientId}/medicines`, MedicinesResponseSchema),

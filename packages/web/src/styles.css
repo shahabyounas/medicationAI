@@ -585,6 +585,67 @@ textarea {
   opacity: 0.5;
 }
 
+/* ========================================================================== */
+/* The lifetime record                                                        */
+/* ========================================================================== */
+
+/* What the record adds up to. Four numbers, equal weight, wrapping on a narrow
+   phone rather than shrinking below a readable size. */
+.totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.total {
+  flex: 1 1 70px;
+  min-width: 0;
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-sm);
+  padding: 12px 10px;
+  text-align: center;
+}
+
+/* A year heading. It earns the size: at a glance it is the only thing that
+   tells you how far back you have scrolled. */
+.year-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid var(--canvas);
+}
+
+.chev {
+  flex: none;
+  font: 800 19px/1 var(--font);
+  color: var(--ink-faint);
+}
+
+/* The dose log: every tablet, with the time it was actually swallowed. */
+.doselog {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 420px;
+  overflow-y: auto;
+  border-top: 1px solid var(--card-border);
+}
+.doselog-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 2px;
+  border-bottom: 1px solid var(--card-border);
+}
+.doselog-row:last-child {
+  border-bottom: none;
+}
+
 .row-card {
   display: flex;
   align-items: center;

@@ -139,7 +139,6 @@ export function IntakeScreen({
       }
     }
     if (target === 'visit') {
-      if (!visitDate) return 'Enter the date of the visit.';
       if (!reason.trim()) return 'Say briefly what you went in for.';
       if (conditionChoice === 'new' && !diagnosis.trim()) {
         return 'Enter the diagnosis, or choose an existing condition.';
@@ -199,7 +198,9 @@ export function IntakeScreen({
       visit: {
         // A date input gives a local calendar day; midday avoids it sliding
         // into the previous day for anyone west of UTC.
-        visitDate: new Date(`${visitDate}T12:00:00`),
+        // The moment it was recorded, not midday on a date somebody typed:
+        // the record's whole claim is that its timestamps are not remembered.
+        visitDate: new Date(),
         type: visitType,
         reason: reason.trim(),
         ...(diagnosis.trim() ? { diagnosis: diagnosis.trim() } : {}),
@@ -494,15 +495,11 @@ function VisitStep(props: {
   return (
     <>
       <div className="field-row">
-        <label className="field">
-          <span className="field-label">Date of the visit</span>
-          <input
-            className="input"
-            type="date"
-            value={props.visitDate}
-            onChange={(e) => props.setVisitDate(e.target.value)}
-          />
-        </label>
+        {/*
+          No date field. Every timestamp in the record is the moment the thing
+          was recorded, so there is nothing here to get wrong — and asking a
+          patient to retype today's date is friction that buys nothing.
+        */}
         <label className="field">
           <span className="field-label">Kind of visit</span>
           <select

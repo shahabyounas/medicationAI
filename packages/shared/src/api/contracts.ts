@@ -7,10 +7,10 @@ import {
   NonEmptyString,
 } from '../schemas/common.js';
 import { AgentEventSchema } from '../schemas/agentEvent.js';
-import { ConditionSchema } from '../schemas/condition.js';
+import { ConditionSchema, ConditionStatusSchema } from '../schemas/condition.js';
 import { CourseProgressSchema, CourseSchema } from '../schemas/course.js';
 import { DoctorSpecialtySchema, DoctorWithHistorySchema } from '../schemas/doctor.js';
-import { DoseSchema } from '../schemas/dose.js';
+import { DoseSchema, DoseStatusSchema } from '../schemas/dose.js';
 import { MedicationFormSchema, MedicationSchema } from '../schemas/medication.js';
 import { MealtimesSchema } from '../schemas/patient.js';
 import { PrescriptionSchema, PrescriptionSourceSchema } from '../schemas/prescription.js';
@@ -449,3 +449,143 @@ export const IntakeOptionsResponseSchema = z.object({
   ),
 });
 export type IntakeOptionsResponse = z.infer<typeof IntakeOptionsResponseSchema>;
+
+/* ========================================================================== */
+/* The lifetime record                                                        */
+/* ========================================================================== */
+
+/**
+ * One thing that happened, on one date.
+ *
+ * Deliberately a flat shape rather than a discriminated union. Every entry is
+ * rendered the same way — a date, a title, a line of detail — and the only
+ * thing `kind` changes is the mark beside it and where tapping it goes. A union
+ * would push that decision into the component for no gain.
+ */
+export const HistoryEntryKindSchema = z.enum([
+  'condition_opened',
+  'condition_resolved',
+  'condition_recurred',
+  'visit',
+  'course_started',
+  'course_completed',
+  'course_stopped',
+]);
+export type HistoryEntryKind = z.infer<typeof HistoryEntryKindSchema>;
+
+export const HistoryEntrySchema = z.object({
+  /** Stable across rebuilds — the source document's id plus the kind. */
+  id: NonEmptyString,
+  kind: HistoryEntryKindSchema,
+  occurredAt: DateSchema,
+  /** "14 October" — the year is the heading it sits under. */
+  dateLabel: NonEmptyString,
+  title: NonEmptyString,
+  detail: z.string().nullable(),
+  /** Where tapping it leads, when it leads anywhere. */
+  conditionId: IdSchema.nullable(),
+  visitId: IdSchema.nullable(),
+  doctorName: z.string().nullable(),
+});
+export type HistoryEntry = z.infer<typeof HistoryEntrySchema>;
+
+export const HistoryMonthSchema = z.object({
+  /** 1–12. */
+  month: z.number().int().min(1).max(12),
+  label: NonEmptyString,
+  entries: z.array(HistoryEntrySchema),
+});
+export type HistoryMonth = z.infer<typeof HistoryMonthSchema>;
+
+export const HistoryYearSchema = z.object({
+  year: z.number().int(),
+  label: NonEmptyString,
+  entryCount: z.number().int().min(0),
+  months: z.array(HistoryMonthSchema),
+});
+export type HistoryYear = z.infer<typeof HistoryYearSchema>;
+
+/**
+ * The whole record, newest first, plus what needs doing right now.
+ *
+ * The present sits at the top of the same list as 1998: today's doses are the
+ * newest entries in the record, not a separate screen. That is what keeps a
+ * lifetime timeline from burying the one dose that is due in ten minutes.
+ */
+export const HistoryResponseSchema = z.object({
+  patientName: NonEmptyString,
+  timeZone: NonEmptyString,
+  greeting: NonEmptyString,
+  /** Pinned above the timeline. Null when nothing is outstanding. */
+  due: DoseViewSchema.nullable(),
+  nextDose: DoseViewSchema.nullable(),
+  todayDoses: z.array(DoseViewSchema),
+  waiting: z.array(WaitingPrescriptionSchema),
+  years: z.array(HistoryYearSchema),
+  totals: z.object({
+    conditions: z.number().int().min(0),
+    visits: z.number().int().min(0),
+    medicines: z.number().int().min(0),
+    dosesTaken: z.number().int().min(0),
+    firstRecordedAt: DateSchema.nullable(),
+    /** "4 months of records", "12 years of records". */
+    spanLabel: NonEmptyString,
+  }),
+});
+export type HistoryResponse = z.infer<typeof HistoryResponseSchema>;
+
+/** One dose, as it actually happened. The unit of the medication log. */
+export const DoseLogEntrySchema = z.object({
+  _id: IdSchema,
+  doseNumber: z.number().int().min(1),
+  scheduledAt: DateSchema,
+  takenAt: DateSchema.nullable(),
+  status: DoseStatusSchema,
+  statusLabel: NonEmptyString,
+  dateLabel: NonEmptyString,
+  scheduledTimeLabel: NonEmptyString,
+  /** Null unless it was actually taken — this is the column that matters. */
+  takenTimeLabel: z.string().nullable(),
+  /** Positive when late, negative when early. Null when never taken. */
+  minutesLate: z.number().int().nullable(),
+});
+export type DoseLogEntry = z.infer<typeof DoseLogEntrySchema>;
+
+export const ConditionMedicationHistorySchema = z.object({
+  courseId: IdSchema,
+  medicationName: NonEmptyString,
+  medicationForm: MedicationFormSchema,
+  instructionLine: NonEmptyString,
+  status: NonEmptyString,
+  statusLabel: NonEmptyString,
+  startedAt: DateSchema.nullable(),
+  endedAt: DateSchema.nullable(),
+  totalDoses: z.number().int().min(0).nullable(),
+  takenCount: z.number().int().min(0),
+  missedCount: z.number().int().min(0),
+  skippedCount: z.number().int().min(0),
+  /** Every dose, newest first. The "what time did I take it" list. */
+  doses: z.array(DoseLogEntrySchema),
+});
+export type ConditionMedicationHistory = z.infer<typeof ConditionMedicationHistorySchema>;
+
+/** One illness, start to finish, with everything that happened for it. */
+export const ConditionHistorySchema = z.object({
+  _id: IdSchema,
+  name: NonEmptyString,
+  plainDescription: z.string().nullable(),
+  status: ConditionStatusSchema,
+  statusLabel: NonEmptyString,
+  isChronic: z.boolean(),
+  startedAt: DateSchema,
+  resolvedAt: DateSchema.nullable(),
+  /** "11 days", "ongoing for 3 years". */
+  durationLabel: NonEmptyString,
+  doctorNames: z.array(NonEmptyString),
+  visits: z.array(VisitDetailSchema),
+  medications: z.array(ConditionMedicationHistorySchema),
+  /** Set when this illness is a return of an earlier one. */
+  recurrenceOfConditionId: IdSchema.nullable(),
+  recurrenceNote: z.string().nullable(),
+});
+export type ConditionHistory = z.infer<typeof ConditionHistorySchema>;
