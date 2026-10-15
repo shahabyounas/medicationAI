@@ -248,6 +248,9 @@ export function App(): ReactNode {
     return data.history.todayDoses.some((d) => d.status === 'due' || d.status === 'missed');
   }, [data]);
 
+  /** The dose waiting right now, if there is one. */
+  const due = data?.history.due ?? null;
+
   /**
    * Let the agent catch up while the app is open.
    *
@@ -602,6 +605,13 @@ export function App(): ReactNode {
                 condition={overlay.data}
                 onClose={closeOverlay}
                 onOpenVisit={(id) => openVisit(id)}
+                // Only when the dose waiting is for *this* illness: a button
+                // that records someone else's tablet is worse than no button.
+                onRecordDose={
+                  due && due.conditionId === overlay.data._id
+                    ? () => setOverlay({ kind: 'dose', dose: due })
+                    : undefined
+                }
               />
             )}
             {overlay.kind === 'record' && (

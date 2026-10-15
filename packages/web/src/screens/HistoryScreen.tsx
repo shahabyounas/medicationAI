@@ -54,13 +54,16 @@ export function HistoryScreen({
   busy: boolean;
 }): ReactNode {
   const [filter, setFilter] = useState<FilterId>('all');
-  const [openYears, setOpenYears] = useState<number[]>(() =>
-    history.years[0] ? [history.years[0].year] : [],
-  );
+  const [picked, setPicked] = useState<number | null>(() => history.years[0]?.year ?? null);
 
   const years = useMemo(() => filterYears(history.years, filter), [history.years, filter]);
   const ribbon = useMemo(() => ribbonYears(years), [years]);
   const busiest = ribbon.reduce((most, year) => Math.max(most, year.entryCount), 0);
+
+  // One year at a time. A decade stacked on one page is a page nobody scrolls,
+  // and it makes the ribbon decorative — it is the control that picks the year.
+  const selected = picked ?? years[0]?.year ?? null;
+  const shown = years.find((year) => year.year === selected) ?? null;
 
   // What is true right now, before any history: the illnesses still running.
   const current = useMemo(
@@ -74,9 +77,6 @@ export function HistoryScreen({
 
   const nothingAtAll =
     history.years.length === 0 && history.waiting.length === 0 && history.todayDoses.length === 0;
-
-  const openYear = (year: number): void =>
-    setOpenYears((current) => (current.includes(year) ? current : [...current, year]));
 
   return (
     <div className="pad">
@@ -120,7 +120,7 @@ export function HistoryScreen({
 
       {history.years.length > 0 && (
         <>
-          <Ribbon years={ribbon} busiest={busiest} onJump={openYear} />
+          <Ribbon years={ribbon} busiest={busiest} selected={selected} onSelect={setPicked} />
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginTop: 18 }}>
             {FILTERS.map((option) => (
@@ -140,27 +140,18 @@ export function HistoryScreen({
             ))}
           </div>
 
-          {years.length === 0 ? (
-            <p className="sub" style={{ marginTop: 22 }}>
-              Nothing of that kind in the record yet.
-            </p>
+          {shown ? (
+            <YearSection
+              year={shown}
+              onOpenCondition={onOpenCondition}
+              onOpenVisit={onOpenVisit}
+            />
           ) : (
-            years.map((year) => (
-              <YearSection
-                key={year.year}
-                year={year}
-                open={openYears.includes(year.year)}
-                onToggle={() =>
-                  setOpenYears((current) =>
-                    current.includes(year.year)
-                      ? current.filter((value) => value !== year.year)
-                      : [...current, year.year],
-                  )
-                }
-                onOpenCondition={onOpenCondition}
-                onOpenVisit={onOpenVisit}
-              />
-            ))
+            <p className="sub" style={{ marginTop: 22 }}>
+              {years.length === 0
+                ? 'Nothing of that kind in the record yet.'
+                : `Nothing in ${selected}${filter === 'all' ? '' : ' of that kind'}.`}
+            </p>
           )}
         </>
       )}
@@ -258,22 +249,38 @@ function ribbonYears(years: readonly HistoryYear[]): { year: number; label: stri
 function Ribbon({
   years,
   busiest,
-  onJump,
+  selected,
+  onSelect,
 }: {
   years: readonly { year: number; label: string; entryCount: number }[];
   busiest: number;
-  onJump: (year: number) => void;
+  selected: number | null;
+  onSelect: (year: number) => void;
 }): ReactNode {
   if (years.length === 0) return null;
-  const newest = years[years.length - 1]?.year;
 
   return (
-    <nav aria-label="Jump to a year" style={{ marginTop: 22 }}>
+    <nav aria-label="Choose a year" style={{ marginTop: 22 }}>
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 7 }}>
         {years.map((year) => {
-          const current = year.year === newest;
-          const bar = (
-            <>
+          const current = year.year === selected;
+          return (
+            <button
+              key={year.year}
+              onClick={() => onSelect(year.year)}
+              aria-pressed={current}
+              // An empty year is still a year you can land on — it answers
+              // "was there really nothing in 2020?" with the year's own page.
+              style={{
+                flex: 1,
+                minWidth: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 6,
+                paddingTop: 10,
+              }}
+            >
               <span
                 style={{
                   width: '100%',
@@ -297,28 +304,7 @@ function Ribbon({
               >
                 {year.label}
               </span>
-            </>
-          );
-
-          const style = {
-            flex: 1,
-            minWidth: 0,
-            display: 'flex',
-            flexDirection: 'column' as const,
-            alignItems: 'center' as const,
-            gap: 6,
-            textDecoration: 'none',
-          };
-
-          // Nothing to jump to in an empty year, so it is not a link.
-          return year.entryCount === 0 ? (
-            <span key={year.year} style={style}>
-              {bar}
-            </span>
-          ) : (
-            <a key={year.year} href={`#year-${year.year}`} onClick={() => onJump(year.year)} style={style}>
-              {bar}
-            </a>
+            </button>
           );
         })}
       </div>
@@ -332,46 +318,37 @@ function Ribbon({
 
 function YearSection({
   year,
-  open,
-  onToggle,
   onOpenCondition,
   onOpenVisit,
 }: {
   year: HistoryYear;
-  open: boolean;
-  onToggle: () => void;
   onOpenCondition: (conditionId: string) => void;
   onOpenVisit: (visitId: string) => void;
 }): ReactNode {
   const loose = year.months.flatMap((month) => month.entries);
 
   return (
-    <section id={`year-${year.year}`} style={{ marginTop: 22, scrollMarginTop: 16 }}>
-      <button className="year-head" onClick={onToggle} aria-expanded={open} style={{ width: '100%' }}>
+    <section style={{ marginTop: 22 }}>
+      <div className="year-head">
         <span className="h2">{year.label}</span>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-          <span style={{ font: '700 13px/1 var(--font)', color: 'var(--ink-soft)' }}>
-            {summarise(year)}
-          </span>
-          <span className="chev">{open ? '⌃' : '⌄'}</span>
+        <span style={{ font: '700 13px/1 var(--font)', color: 'var(--ink-soft)' }}>
+          {summarise(year)}
         </span>
-      </button>
+      </div>
 
-      {open && (
-        <div className="stack" style={{ marginTop: 14 }}>
-          {year.episodes.map((episode) => (
-            <EpisodeCard key={episode.conditionId} episode={episode} onOpen={onOpenCondition} />
-          ))}
-          {loose.map((entry) => (
-            <EntryRow
-              key={entry.id}
-              entry={entry}
-              onOpenCondition={onOpenCondition}
-              onOpenVisit={onOpenVisit}
-            />
-          ))}
-        </div>
-      )}
+      <div className="stack" style={{ marginTop: 14 }}>
+        {year.episodes.map((episode) => (
+          <EpisodeCard key={episode.conditionId} episode={episode} onOpen={onOpenCondition} />
+        ))}
+        {loose.map((entry) => (
+          <EntryRow
+            key={entry.id}
+            entry={entry}
+            onOpenCondition={onOpenCondition}
+            onOpenVisit={onOpenVisit}
+          />
+        ))}
+      </div>
     </section>
   );
 }
