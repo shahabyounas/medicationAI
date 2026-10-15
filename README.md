@@ -461,6 +461,43 @@ clinical advice even in principle.
 
 ---
 
+### 12. The day, at the top of the record
+
+The record is the product and it is still the screen — but the screen opens on a
+patient standing in her kitchen at half past one wondering whether she has taken
+her tablet, and the answer to that was four hundred pixels down, under a
+heading, a statistics line and two illness chips. Nothing above it was anything
+she could act on.
+
+There were two components doing this and between them they never answered the
+question people actually arrive with: a loud amber card when one dose was *due*,
+and a quiet grey line naming the *next* one otherwise. With a tablet taken at
+eight and three still to come, the screen said "Next: Metformin, 8:00 AM" and
+nothing about the rest of the day.
+
+One panel, at the top, listing every dose of the day with what became of each.
+**Its volume is proportional**, which is the whole design:
+
+| State | How it looks |
+| --- | --- |
+| Something missed | Red, and it leads with the miss |
+| Something due now | Amber, the medicine named, the pulsing button |
+| Doses still to come | Present and prominent, but calm |
+| Everything taken | A plain card and a green tick, nothing more |
+
+The finished state is deliberately the *quietest* of the four: a solid green
+card would be louder than the one saying three doses are still owed, which is
+backwards — congratulation should never outweigh instruction. And the panel is
+never permanently red, because a cue that is always lit is one a patient reads
+past within a day. This app already made that argument about its own tab badge;
+it would be strange to abandon it at the top of the same screen. What stays
+constant is the **position**, which is what makes a glance work.
+
+A dose still to come carries no status word, because "Later" beside "1:30 PM"
+repeats what the time already says and costs the medicine name the width it
+needs on a phone. The dot and the time carry it; the row's `aria-label` spells
+it out in full.
+
 ## The attention cue
 
 When a dose is due or has been missed, the **Record** tab turns red and blinks a

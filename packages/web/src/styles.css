@@ -1570,3 +1570,46 @@ textarea {
     font-size: 10.5pt;
   }
 }
+
+/* --- One dose of today, in the panel at the top of the record ------------ */
+
+/*
+ * A row, not a card.
+ *
+ * Three or four of these stack inside the Today panel, and card chrome on each
+ * would turn the one thing the screen is for into a list of boxes. The tappable
+ * ones get a surface and a chevron so the difference is visible without reading
+ * the status — a dose already taken is not a button.
+ */
+.dose-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 52px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  text-align: left;
+}
+
+.dose-row--tap {
+  background: rgba(255, 255, 255, 0.72);
+  cursor: pointer;
+}
+
+.dose-row--tap:hover {
+  background: #fff;
+}
+
+.dose-row--tap:focus-visible {
+  outline: 3px solid var(--green);
+  outline-offset: 2px;
+}
+
+.dose-row .dot {
+  width: 30px;
+  height: 30px;
+  line-height: 30px;
+  font-size: 14px;
+}

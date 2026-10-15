@@ -80,6 +80,22 @@ export function HistoryScreen({
 
   return (
     <div className="pad">
+      {/*
+        Today, before anything else.
+        
+        The record is the product and it is still the screen — but the screen
+        opens on a patient who is standing in her kitchen at half past one
+        wondering whether she has taken her tablet, and the answer to that was
+        four hundred pixels down, under a heading, a statistics line and two
+        illness chips. Nothing above it was anything she could act on.
+      */}
+      <TodayPanel
+        doses={history.todayDoses}
+        due={history.due}
+        onOpenDose={onOpenDose}
+        busy={busy}
+      />
+
       <div className="spread">
         <h1 className="h1">Your record</h1>
         <span style={{ font: '800 14px/1 var(--font)', color: 'var(--ink-soft)' }}>
@@ -104,15 +120,15 @@ export function HistoryScreen({
         </div>
       )}
 
-      {/* 2 — the one thing to do now, when there is one. The record is the
-          screen, but a dose waiting is still the reason the app exists. */}
-      {nothingAtAll ? (
-        <NothingSetUp onAdd={onAddPrescription} busy={busy} />
-      ) : history.due ? (
-        <DoseCard dose={history.due} due onOpen={onOpenDose} busy={busy} />
-      ) : history.nextDose ? (
+      {/* The day itself is at the top of the screen now; what is left here is
+          the case where there is no day to show because nothing is set up. */}
+      {nothingAtAll && <NothingSetUp onAdd={onAddPrescription} busy={busy} />}
+
+      {/* Nothing today, but something is running — say when it next comes round
+          rather than leaving the screen silent about it. */}
+      {!nothingAtAll && history.todayDoses.length === 0 && history.nextDose && (
         <NextDoseLine dose={history.nextDose} onOpen={onOpenDose} busy={busy} />
-      ) : null}
+      )}
 
       {history.waiting.map((item) => (
         <WaitingCard key={item._id} item={item} onStart={onStartCourse} busy={busy} />
@@ -622,46 +638,290 @@ function describeKind(kind: HistoryEntryKind): { tone: string; mark: string } {
 /* The present                                                                */
 /* -------------------------------------------------------------------------- */
 
-function DoseCard({
-  dose,
+/**
+ * The whole day, at the top of the screen.
+ *
+ * This replaces two components that between them never answered the question a
+ * patient actually arrives with. There was a loud amber card when one dose was
+ * *due*, and a quiet grey line naming the *next* one otherwise — so at half
+ * past one, with a tablet taken at eight and two still to come, the screen said
+ * "Next: Metformin, 8:00 AM" and nothing about the rest of the day. "Have I
+ * taken it?" and "what is left?" were both unanswerable without tapping
+ * through.
+ *
+ * So it lists every dose of the day, in order, with what became of each one.
+ *
+ * **The volume is proportional, and that is deliberate.** The temptation with a
+ * panel like this is to make it permanently red so it cannot be missed, and
+ * that is exactly how it stops being information: a cue that is always lit is
+ * one a patient reads past within a day, and this app already made that
+ * argument about its own tab badge. So:
+ *
+ *   - something missed → red, and it says so first
+ *   - something due now → amber, with the pulsing button
+ *   - doses still to come → present and prominent, but calm
+ *   - everything taken → a plain card and a green tick, nothing more
+ *
+ * The finished state is deliberately the *quietest* of the four. A solid green
+ * card would be louder than the one that says three doses are still owed, which
+ * is backwards: congratulation should never outweigh instruction.
+ *
+ * It is at the top in all four states, because consistency of *position* is
+ * what makes a glance work. It is only the colour that moves.
+ */
+function TodayPanel({
+  doses,
   due,
+  onOpenDose,
+  busy,
+}: {
+  doses: readonly DoseView[];
+  due: DoseView | null;
+  onOpenDose: (dose: DoseView) => void;
+  busy: boolean;
+}): ReactNode {
+  if (doses.length === 0) return null;
+
+  const ordered = [...doses].sort(
+    (a, b) => new Date(a.scheduledAt).getTime() - new Date(b.scheduledAt).getTime(),
+  );
+
+  const taken = ordered.filter((d) => d.status === 'taken' || d.status === 'taken_late');
+  const missed = ordered.filter((d) => d.status === 'missed');
+  const skipped = ordered.filter((d) => d.status === 'skipped');
+  const toCome = ordered.filter((d) => d.status === 'scheduled');
+
+  // The dose the big button acts on: the one due now, or the next one owed.
+  const actionable = due ?? missed[0] ?? null;
+
+  const tone: 'missed' | 'due' | 'waiting' | 'done' =
+    missed.length > 0 ? 'missed' : due ? 'due' : toCome.length > 0 ? 'waiting' : 'done';
+
+  const cardClass =
+    tone === 'missed'
+      ? 'card card--red'
+      : tone === 'due'
+        ? 'card card--amber'
+        : 'card';
+
+  const ink =
+    tone === 'missed'
+      ? 'var(--red-ink)'
+      : tone === 'due'
+        ? 'var(--amber-ink)'
+        : 'var(--ink)';
+
+  const remaining = toCome.length + missed.length;
+
+  /** The one line that has to work at a glance, from across a kitchen. */
+  const headline =
+    tone === 'missed'
+      ? `${missed.length} missed${
+          toCome.length > 0 ? `, ${toCome.length} still to take` : ''
+        }`
+      : tone === 'due'
+        ? `Take your ${due!.medicationName} now`
+        : tone === 'waiting'
+          ? `${toCome.length} still to take today`
+          : `All ${taken.length} taken today`;
+
+  const subline =
+    tone === 'done'
+      ? skipped.length > 0
+        ? `${skipped.length} skipped. Nothing else is owed.`
+        : 'Nothing else is owed today.'
+      : `${taken.length} of ${ordered.length} taken${
+          skipped.length > 0 ? ` · ${skipped.length} skipped` : ''
+        }`;
+
+  return (
+    <div
+      className={cardClass}
+      style={{ padding: 18, marginBottom: 18 }}
+      // A live region: the day changes under the patient as the agent ticks,
+      // and a screen reader should hear that a dose has come due.
+      aria-live="polite"
+    >
+      <div className="spread" style={{ alignItems: 'flex-start' }}>
+        <div style={{ minWidth: 0 }}>
+          <div className="eyebrow" style={{ color: ink, marginBottom: 6 }}>
+            Today
+          </div>
+          <div style={{ font: '900 22px/1.2 var(--font)', color: ink }}>{headline}</div>
+          <div
+            style={{
+              font: '600 14.5px/1.4 var(--font)',
+              color: tone === 'done' ? 'var(--ink-soft)' : ink,
+              opacity: tone === 'done' ? 1 : 0.85,
+              marginTop: 3,
+            }}
+          >
+            {subline}
+          </div>
+        </div>
+
+        {tone === 'done' && (
+          <span className="dot dot--green" aria-hidden="true" style={{ flex: 'none' }}>
+            ✓
+          </span>
+        )}
+      </div>
+
+      {/* Every dose of the day, so "what is left?" never needs a tap. */}
+      <div className="stack" style={{ marginTop: 14, gap: 6 }}>
+        {ordered.map((dose) => (
+          <DoseRow key={dose._id} dose={dose} onOpen={onOpenDose} busy={busy} />
+        ))}
+      </div>
+
+      {actionable && (
+        <button
+          className={`btn btn--primary${due ? ' btn--pulse' : ''}`}
+          style={{ marginTop: 14 }}
+          onClick={() => onOpenDose(actionable)}
+          disabled={busy}
+        >
+          {due
+            ? `I took my ${due.medicationName} ✓`
+            : `Record the ${actionable.clockTime} ${actionable.medicationName}`}
+        </button>
+      )}
+
+      {!actionable && remaining > 0 && (
+        <div
+          style={{
+            font: '600 14px/1.4 var(--font)',
+            color: 'var(--ink-soft)',
+            marginTop: 12,
+            paddingTop: 12,
+            borderTop: '1px solid var(--card-border)',
+          }}
+        >
+          I'll remind you at {toCome[0]!.clockTime}. Tap any of them to record it early.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One dose of the day.
+ *
+ * Status is a glyph, a word and a colour together, never colour alone — the
+ * same rule the charts follow, and for the same reason: taken-against-missed is
+ * green-against-red, which is precisely the pair a red-green colourblind reader
+ * cannot separate.
+ */
+function DoseRow({
+  dose,
   onOpen,
   busy,
 }: {
   dose: DoseView;
-  due: boolean;
   onOpen: (dose: DoseView) => void;
   busy: boolean;
 }): ReactNode {
-  return (
-    <div className={`card${due ? ' card--amber' : ''}`} style={{ padding: 18 }}>
-      <div
-        className="eyebrow"
-        style={{ color: due ? 'var(--amber-ink)' : 'var(--ink-faint)', marginBottom: 12 }}
-      >
-        {due ? 'Take this now' : `Next, at ${dose.clockTime}`}
-      </div>
+  const state = describeDoseState(dose.status);
+  const tappable = dose.isActionable || dose.status === 'missed';
 
-      <div className="row" style={{ gap: 13 }}>
-        <PillIcon tone={glyphFor(dose.medicationForm)} size={48} />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ font: '900 20px/1.2 var(--font)' }}>{dose.medicationName}</div>
-          <div style={{ font: '600 14.5px/1.4 var(--font)', color: 'var(--ink-soft)' }}>
-            {describeUnits(dose.amount, dose.medicationForm)} at {dose.clockTime}
-          </div>
-        </div>
-      </div>
-
-      <button
-        className={`btn btn--primary${due ? ' btn--pulse' : ''}`}
-        style={{ marginTop: 14 }}
-        onClick={() => onOpen(dose)}
-        disabled={busy}
+  const content = (
+    <>
+      <span className={`dot ${state.dot}`} aria-hidden="true" style={{ flex: 'none' }}>
+        {state.glyph}
+      </span>
+      <span
+        style={{
+          font: '800 15px/1.3 var(--font)',
+          width: 70,
+          flex: 'none',
+          fontVariantNumeric: 'tabular-nums',
+          textAlign: 'left',
+        }}
       >
-        I took it ✓
-      </button>
-    </div>
+        {dose.clockTime}
+      </span>
+      <span
+        style={{
+          flex: 1,
+          minWidth: 0,
+          textAlign: 'left',
+          font: '700 15px/1.3 var(--font)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          opacity: state.spent ? 0.65 : 1,
+        }}
+      >
+        {dose.medicationName}
+      </span>
+      <span
+        style={{
+          font: '700 13.5px/1.3 var(--font)',
+          color: state.ink,
+          flex: 'none',
+        }}
+      >
+        {state.label}
+      </span>
+      {tappable && (
+        <span className="chev" aria-hidden="true" style={{ flex: 'none' }}>
+          ›
+        </span>
+      )}
+    </>
   );
+
+  if (!tappable) {
+    return (
+      <div className="dose-row" aria-label={`${dose.clockTime} ${dose.medicationName}: ${state.label || dose.statusLabel}`}>
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      className="dose-row dose-row--tap"
+      onClick={() => onOpen(dose)}
+      disabled={busy}
+      aria-label={`${dose.clockTime} ${dose.medicationName}: ${state.label || dose.statusLabel}. Record it.`}
+    >
+      {content}
+    </button>
+  );
+}
+
+function describeDoseState(status: DoseView['status']): {
+  dot: string;
+  glyph: string;
+  label: string;
+  ink: string;
+  spent: boolean;
+} {
+  switch (status) {
+    case 'taken':
+      return { dot: 'dot--green', glyph: '✓', label: 'Taken', ink: 'var(--green)', spent: true };
+    case 'taken_late':
+      return {
+        dot: 'dot--green',
+        glyph: '✓',
+        label: 'Taken late',
+        ink: 'var(--green)',
+        spent: true,
+      };
+    case 'due':
+      return { dot: 'dot--amber', glyph: '!', label: 'Take it now', ink: 'var(--amber-ink)', spent: false };
+    case 'missed':
+      return { dot: 'dot--red', glyph: '✕', label: 'Missed', ink: 'var(--red)', spent: false };
+    case 'skipped':
+      return { dot: 'dot--grey', glyph: '–', label: 'Skipped', ink: 'var(--ink-soft)', spent: true };
+    default:
+      // No word: "Later" beside "1:30 PM" repeats what the time already says,
+      // and on a 360px phone it costs the medicine name the width it needs to
+      // be read. The dot and the time carry it; the row's aria-label spells it
+      // out for a screen reader.
+      return { dot: 'dot--grey', glyph: '·', label: '', ink: 'var(--ink-faint)', spent: false };
+  }
 }
 
 /**

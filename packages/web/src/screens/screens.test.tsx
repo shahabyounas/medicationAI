@@ -2,6 +2,8 @@ import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import {
   AppointmentsResponseSchema,
+  HistoryResponseSchema,
+  type HistoryResponse,
   InsightsResponseSchema,
   MedicinesResponseSchema,
   ProfileResponseSchema,
@@ -11,6 +13,7 @@ import {
 } from '@medication-ai/shared';
 import { readFileSync } from 'node:fs';
 import { HealthScreen } from './HealthScreen.js';
+import { HistoryScreen } from './HistoryScreen.js';
 import { ShareScreen } from './ShareScreen.js';
 import { ProfileScreen } from './ProfileScreen.js';
 import { MedicinesScreen } from './MedicinesScreen.js';
@@ -302,5 +305,120 @@ describe('charts on awkward data', () => {
       />,
     );
     expect(html).not.toContain('NaN');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The day, at the top of the record                                          */
+/* -------------------------------------------------------------------------- */
+
+const history = load('history', HistoryResponseSchema);
+
+/** The same day, with its doses forced into a given state. */
+function withToday(
+  statuses: ('taken' | 'scheduled' | 'due' | 'missed' | 'skipped')[],
+): HistoryResponse {
+  const doses = history.todayDoses.slice(0, statuses.length).map((dose, index) => ({
+    ...dose,
+    status: statuses[index]!,
+    isActionable: statuses[index] === 'scheduled' || statuses[index] === 'due',
+  }));
+  return {
+    ...history,
+    todayDoses: doses,
+    due: doses.find((dose) => dose.status === 'due') ?? null,
+  };
+}
+
+function renderRecord(data: HistoryResponse): string {
+  return renderToString(
+    <HistoryScreen
+      history={data}
+      busy={false}
+      onOpenDose={noop}
+      onOpenCondition={noop}
+      onOpenVisit={noop}
+      onAddPrescription={noop}
+      onStartCourse={noop}
+    />,
+  );
+}
+
+describe('the Today panel', () => {
+  /**
+   * The point of the whole thing: a patient wondering whether she has taken her
+   * tablet should not have to scroll past a heading, a statistics line and two
+   * illness chips to find out.
+   */
+  it('comes before the record heading', () => {
+    const html = renderRecord(withToday(['taken', 'scheduled', 'scheduled']));
+    expect(html.indexOf('Today')).toBeLessThan(html.indexOf('Your record'));
+  });
+
+  it('lists every dose of the day, not just the next one', () => {
+    const html = renderRecord(withToday(['taken', 'scheduled', 'scheduled', 'scheduled']));
+    for (const dose of history.todayDoses.slice(0, 4)) {
+      expect(html).toContain(dose.clockTime);
+    }
+  });
+
+  it('counts what is left, not what exists', () => {
+    const html = renderRecord(withToday(['taken', 'taken', 'scheduled', 'scheduled']));
+    expect(html).toContain('2 still to take today');
+    expect(html).toContain('2 of 4 taken');
+  });
+
+  it('leads with the missed dose when there is one', () => {
+    const html = renderRecord(withToday(['taken', 'missed', 'scheduled']));
+    expect(html).toContain('1 missed');
+    expect(html).toContain('card--red');
+  });
+
+  it('turns amber and names the medicine when one is due', () => {
+    const data = withToday(['taken', 'due', 'scheduled']);
+    const html = renderRecord(data);
+    expect(html).toContain('card--amber');
+    expect(html).toContain(`Take your ${data.due!.medicationName} now`);
+    // The pulsing button is reserved for a dose that is actually due.
+    expect(html).toContain('btn--pulse');
+  });
+
+  /**
+   * The restraint half. A cue that is always lit is one a patient reads past
+   * within a day — this app already made that argument about its tab badge.
+   */
+  it('stays calm when nothing is due yet', () => {
+    const html = renderRecord(withToday(['taken', 'scheduled', 'scheduled']));
+    expect(html).not.toContain('card--red');
+    expect(html).not.toContain('card--amber');
+    expect(html).not.toContain('btn--pulse');
+  });
+
+  it('goes quiet and green once everything is taken', () => {
+    const html = renderRecord(withToday(['taken', 'taken', 'taken']));
+    expect(html).toContain('All 3 taken today');
+    expect(html).toContain('Nothing else is owed today');
+    expect(html).not.toContain('btn--pulse');
+  });
+
+  it('counts a skipped dose honestly rather than as taken', () => {
+    const html = renderRecord(withToday(['taken', 'skipped', 'taken']));
+    expect(html).toContain('1 skipped');
+    expect(html).not.toContain('All 3 taken today');
+  });
+
+  it('shows a meaningful status as a word, never colour alone', () => {
+    const html = renderRecord(withToday(['taken', 'missed', 'scheduled', 'skipped']));
+    for (const word of ['Taken', 'Missed', 'Skipped']) {
+      expect(html).toContain(word);
+    }
+    // A dose still to come needs no word — its time is the status — but a
+    // screen reader is still told, through the row's label.
+    expect(html).toContain('Later today');
+  });
+
+  it('renders nothing at all on a day with no doses', () => {
+    const html = renderRecord({ ...history, todayDoses: [], due: null });
+    expect(html).not.toContain('still to take today');
   });
 });
